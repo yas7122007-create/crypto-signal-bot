@@ -1,0 +1,17 @@
+# Profil khusus pemeriksaan sinyal; salin dengan setup_local.py hermes.
+_config_version: 49
+model:
+  default: crypto-hermes:latest
+  provider: custom
+  base_url: http://127.0.0.1:11434/v1
+  context_length: 65536
+  ollama_num_ctx: 65536
+platform_toolsets:
+  cli: []
+mcp_servers: {}
+agent:
+  max_turns: 2
+  reasoning_effort: none
+  run_budget_seconds: 120
+display:
+  interface: cli
