@@ -1,9 +1,5 @@
 # Bot analisis crypto Python
 
-## Kontribusi
-
-- **Yudistira**: ide proyek, kebutuhan fitur, konfigurasi lokal, dan pengoperasian bot.
-- **ChatGPT / Codex (OpenAI)**: bantuan implementasi kode, debugging, dokumentasi, dan pengujian otomatis bersama Yudistira.
 
 ## Status fitur
 
