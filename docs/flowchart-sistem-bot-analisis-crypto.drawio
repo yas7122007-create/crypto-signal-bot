@@ -1,0 +1,493 @@
+<mxfile host="Electron" agent="Codex">
+  <diagram id="crypto-system" name="Sistem Bot Analisis Crypto">
+    <mxGraphModel dx="3720" dy="1620" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2339" pageHeight="1654" background="#FFFFFF" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=32;fontStyle=1;" value="FLOWCHART SISTEM BOT ANALISIS CRYPTO" vertex="1">
+          <mxGeometry height="48" width="1900" x="50" y="35" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=18;fontColor=#52657A;" value="Alur implementasi saat ini  |  Analisis multi-timeframe, konfirmasi AI, sinyal &amp; evaluasi PAPER" vertex="1">
+          <mxGeometry height="32" width="1900" x="50" y="90" as="geometry" />
+        </mxCell>
+        <mxCell id="edition" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=16;align=right;fontStyle=1;" value="1 HALAMAN&#xa;A2 LANDSCAPE" vertex="1">
+          <mxGeometry height="65" width="249" x="2040" y="40" as="geometry" />
+        </mxCell>
+        <mxCell id="panel0" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#FAFBFD;strokeColor=#E2E8F0;" value="" vertex="1">
+          <mxGeometry height="1225" width="519" x="40" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="section0" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#17324D;strokeColor=#17324D;fontColor=#FFFFFF;fontStyle=1;fontSize=18;" value="01  SIKLUS &amp; DATA PASAR" vertex="1">
+          <mxGeometry height="42" width="519" x="40" y="145" as="geometry" />
+        </mxCell>
+        <mxCell id="panel1" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#FAFBFD;strokeColor=#E2E8F0;" value="" vertex="1">
+          <mxGeometry height="1225" width="519" x="620" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="section1" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#51456D;strokeColor=#51456D;fontColor=#FFFFFF;fontStyle=1;fontSize=18;" value="02  ENGINE &amp; PEMILIHAN KANDIDAT" vertex="1">
+          <mxGeometry height="42" width="519" x="620" y="145" as="geometry" />
+        </mxCell>
+        <mxCell id="panel2" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#FAFBFD;strokeColor=#E2E8F0;" value="" vertex="1">
+          <mxGeometry height="1225" width="519" x="1200" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="section2" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#285C6B;strokeColor=#285C6B;fontColor=#FFFFFF;fontStyle=1;fontSize=18;" value="03  VALIDASI &amp; KONFIRMASI AI" vertex="1">
+          <mxGeometry height="42" width="519" x="1200" y="145" as="geometry" />
+        </mxCell>
+        <mxCell id="panel3" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#FAFBFD;strokeColor=#E2E8F0;" value="" vertex="1">
+          <mxGeometry height="1225" width="519" x="1780" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="section3" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fillColor=#38664C;strokeColor=#38664C;fontColor=#FFFFFF;fontStyle=1;fontSize=18;" value="04  SINYAL &amp; HASIL SIKLUS" vertex="1">
+          <mxGeometry height="42" width="519" x="1780" y="145" as="geometry" />
+        </mxCell>
+        <mxCell id="start" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=1;arcSize=50;fillColor=#17324D;strokeColor=#17324D;fontColor=#FFFFFF;fontStyle=1;" value="MULAI SIKLUS&#xa;Terjadwal / manual" vertex="1">
+          <mxGeometry height="58" width="250" x="175" y="220" as="geometry" />
+        </mxCell>
+        <object label="Mulai workflow Prefect&#xa;Konfigurasi, rules &amp; koneksi layanan" tooltip="bot.py: cycle / main; services.py: rules_from_env. Jadwal setiap menit; concurrency 1. Mode once memaksa scan." id="init">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;" vertex="1">
+            <mxGeometry height="75" width="340" x="130" y="315" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Evaluasi sinyal PAPER aktif&#xa;Candle 1m: entry, SL, TP / timeout&#xa;Perbarui status; hitung biaya + funding&#xa;Simpan outcome &amp; jurnal" tooltip="bot.py: evaluate; engine.py: paper_update / settle. Gagal mengambil lock: lewati evaluasi. Data evaluasi gagal: pertahankan status, tunda evaluasi. SL didahulukan jika intrabar ambigu." id="paper">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=process;size=0.045;fillColor=#F2F0FA;strokeColor=#8273A3;fontSize=16;" vertex="1">
+            <mxGeometry height="120" width="340" x="130" y="425" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Lock scan tersedia &amp;&#xa;candle 15m baru&#xa;siap diproses?*" tooltip="bot.py: scan. Lock DB harus tersedia. Kecuali force: tunggu 120 detik sesudah close 15m, dan bucket belum pernah dipindai." id="scan_ready">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" vertex="1">
+            <mxGeometry height="135" width="280" x="160" y="595" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Z" tooltip="Konektor pada halaman yang sama: Z" id="z_wait">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="507" y="640" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Pilih maksimal 50 coin&#xa;USDT perpetual aktif &amp; likuid&#xa;Gainer, loser, volume, akumulasi" tooltip="services.py: Binance.universe. Maksimum sesuai UNIVERSE_SIZE (1–50); filter usia listing dan volume. Kuota 30/30/20/20%, deduplikasi, isi kekurangan dari volume." id="universe">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;" vertex="1">
+            <mxGeometry height="100" width="340" x="130" y="785" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="fetch" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=parallelogram;perimeter=parallelogramPerimeter;size=0.10;fillColor=#EBF6FF;strokeColor=#4480A6;" value="Ambil coin berikutnya&#xa;Candle 15m / 1h / 4h + tickSize&#xa;Sumber: Binance Futures" vertex="1">
+          <mxGeometry height="100" width="340" x="130" y="945" as="geometry" />
+        </mxCell>
+        <object label="N" tooltip="Konektor pada halaman yang sama: N" id="n_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="62" y="973" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Candle valid,&#xa;urut &amp; terbaru?&#xa;Minimal 60 per TF" tooltip="engine.py: candles. Hanya candle tertutup; validasi waktu, OHLCV, taker-buy, gap, duplikat, jumlah minimum dan candle terakhir. Kegagalan data per coin menghasilkan HOLD." id="data_valid">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" vertex="1">
+            <mxGeometry height="125" width="280" x="160" y="1100" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="H" tooltip="Konektor pada halaman yang sama: H" id="h_data">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="507" y="1140" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="candles_db" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#EAF5EE;strokeColor=#59826B;" value="MariaDB&#xa;Simpan candle tervalidasi" vertex="1">
+          <mxGeometry height="76" width="340" x="130" y="1280" as="geometry" />
+        </mxCell>
+        <object label="A" tooltip="Konektor pada halaman yang sama: A" id="a_send">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="278" y="1370" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="e1" edge="1" parent="1" source="start" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="init" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" edge="1" parent="1" source="init" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="paper" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" edge="1" parent="1" source="paper" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="scan_ready" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" edge="1" parent="1" source="universe" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="fetch" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" edge="1" parent="1" source="fetch" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="data_valid" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" edge="1" parent="1" source="candles_db" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="a_send" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" edge="1" parent="1" source="scan_ready" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="universe" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" edge="1" parent="1" source="scan_ready" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="z_wait" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" edge="1" parent="1" source="n_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="fetch" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e10" edge="1" parent="1" source="data_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="candles_db" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e11" edge="1" parent="1" source="data_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="h_data" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <object label="A" tooltip="Konektor pada halaman yang sama: A" id="a_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="858" y="220" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Hitung indikator multi-timeframe&#xa;EMA20/50, ATR14, support/resistance&#xa;Sweep / breakout 20 candle&#xa;Volume relatif &amp; taker delta" tooltip="engine.py: features / analyze. EMA20/50 pada semua TF, ATR rata-rata 14 true ranges. FVG dan delta20 juga disediakan sebagai fitur; bukan syarat wajib pemicu." id="features">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=process;size=0.045;fillColor=#F2F0FA;strokeColor=#8273A3;fontSize=16;" vertex="1">
+            <mxGeometry height="120" width="340" x="710" y="315" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Tren, pemicu &amp;&#xa;tekanan transaksi&#xa;mendukung arah?" tooltip="4h &amp; 1h harus selaras LONG/SHORT; close 15m mendukung EMA20; sweep/reclaim atau breakout; relative_volume &gt;= rules.relative_volume (default 1.2); taker_imbalance searah &gt;= 0.05 default dan delta3 searah &gt; 0." id="setup_valid">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" vertex="1">
+            <mxGeometry height="135" width="280" x="740" y="485" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="H" tooltip="Konektor pada halaman yang sama: H" id="h_setup">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1087" y="530" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Hitung entry, SL &amp; TP&#xa;Bulatkan sesuai tickSize&#xa;Jarak SL 0,5–3 ATR; RR dari rules&#xa;Periksa hambatan S/R 1h &amp; 4h" tooltip="engine.py: analyze. ATR harus &gt;0; entry = close 15m; SL dari pivot 5 candle ±0.15 ATR; TP = entry ± risk * reward_risk (default 2). Harga harus positif setelah pembulatan; level HTF tidak boleh menghalangi target." id="risk">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=process;size=0.045;fillColor=#F2F0FA;strokeColor=#8273A3;fontSize=16;" vertex="1">
+            <mxGeometry height="120" width="340" x="710" y="675" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="risk_valid" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" value="Harga &amp; ruang&#xa;risiko/target valid?" vertex="1">
+          <mxGeometry height="115" width="280" x="740" y="845" as="geometry" />
+        </mxCell>
+        <object label="H" tooltip="Konektor pada halaman yang sama: H" id="h_risk">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1087" y="880" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="collect" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;" value="Masukkan kandidat LONG / SHORT&#xa;Entry, SL, TP, alasan &amp; rank" vertex="1">
+          <mxGeometry height="78" width="340" x="710" y="1000" as="geometry" />
+        </mxCell>
+        <mxCell id="more_coins" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" value="Masih ada coin&#xa;belum dianalisis?" vertex="1">
+          <mxGeometry height="115" width="280" x="740" y="1120" as="geometry" />
+        </mxCell>
+        <object label="N" tooltip="Konektor pada halaman yang sama: N" id="n_more">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1087" y="1155" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="rank" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;" value="Urutkan kandidat menurut rank&#xa;Volume relatif × |taker imbalance|" vertex="1">
+          <mxGeometry height="76" width="340" x="710" y="1280" as="geometry" />
+        </mxCell>
+        <object label="B" tooltip="Konektor pada halaman yang sama: B" id="b_first">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="858" y="1370" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="e12" edge="1" parent="1" source="a_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="features" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e13" edge="1" parent="1" source="features" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="setup_valid" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e14" edge="1" parent="1" source="risk" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="risk_valid" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e15" edge="1" parent="1" source="collect" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="more_coins" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e16" edge="1" parent="1" source="rank" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="b_first" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e17" edge="1" parent="1" source="setup_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="risk" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e18" edge="1" parent="1" source="setup_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="h_setup" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e19" edge="1" parent="1" source="risk_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="collect" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e20" edge="1" parent="1" source="risk_valid" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="h_risk" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e21" edge="1" parent="1" source="more_coins" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="n_more" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e22" edge="1" parent="1" source="more_coins" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="rank" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <object label="B" tooltip="Konektor pada halaman yang sama: B" id="b_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1438" y="220" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="more_candidates" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" value="Masih ada kandidat&#xa;belum diproses?" vertex="1">
+          <mxGeometry height="110" width="280" x="1320" y="315" as="geometry" />
+        </mxCell>
+        <object label="Z" tooltip="Konektor pada halaman yang sama: Z" id="z_done">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1667" y="348" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Ambil kandidat dengan rank tertinggi&#xa;Cek duplikasi, kuota &amp; jurnal&#xa;Ambil quote / funding terbaru" tooltip="bot.py: scan; services.py: memories. Cek simbol aktif, ID duplikat, MAX_OPEN_SIGNALS (default 3), maksimum 5 panggilan AI/siklus. Jika sampel jurnal cukup (default 20), average_net_r harus positif." id="pick">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;" vertex="1">
+            <mxGeometry height="100" width="340" x="1290" y="465" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Batas sinyal, jurnal&#xa;&amp; filter pasar lolos?" tooltip="engine.py: validate_market. Cek urutan harga, quote/funding terbaru, umur candle &lt;=10 menit, spread &lt;=8 bps default, |funding|&lt;=0.001 default, deviasi entry&lt;=0.25 ATR, net RR setelah biaya &gt;=1." id="guard">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" vertex="1">
+            <mxGeometry height="125" width="280" x="1320" y="610" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="K" tooltip="Konektor pada halaman yang sama: K" id="k_guard">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1667" y="650" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Minta konfirmasi AI lokal&#xa;Ollama langsung / Hermes Agent&#xa;Respons JSON: CONFIRM atau HOLD" tooltip="services.py: confirm / hermes_confirm. AI memeriksa bukti + jurnal dan tidak mengubah harga/risiko. Error, timeout, JSON tidak valid atau respons terpotong menjadi HOLD." id="ai">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=process;size=0.045;fillColor=#F2F0FA;strokeColor=#8273A3;" vertex="1">
+            <mxGeometry height="105" width="340" x="1290" y="780" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="confirmed" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" value="AI mengembalikan&#xa;CONFIRM yang valid?" vertex="1">
+          <mxGeometry height="115" width="280" x="1320" y="930" as="geometry" />
+        </mxCell>
+        <object label="K" tooltip="Konektor pada halaman yang sama: K" id="k_ai">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1667" y="965" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="refresh" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;" value="Ambil ulang quote &amp; funding&#xa;Validasi kondisi pasar setelah AI" vertex="1">
+          <mxGeometry height="80" width="340" x="1290" y="1090" as="geometry" />
+        </mxCell>
+        <mxCell id="fresh" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" value="Kondisi pasar&#xa;masih valid?" vertex="1">
+          <mxGeometry height="115" width="280" x="1320" y="1220" as="geometry" />
+        </mxCell>
+        <object label="K" tooltip="Konektor pada halaman yang sama: K" id="k_fresh">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1667" y="1255" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="C" tooltip="Konektor pada halaman yang sama: C" id="c_send">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1438" y="1370" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="e23" edge="1" parent="1" source="b_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="more_candidates" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e24" edge="1" parent="1" source="pick" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="guard" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e25" edge="1" parent="1" source="ai" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="confirmed" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e26" edge="1" parent="1" source="refresh" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="fresh" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e27" edge="1" parent="1" source="more_candidates" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="pick" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e28" edge="1" parent="1" source="more_candidates" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="z_done" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e29" edge="1" parent="1" source="guard" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="ai" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e30" edge="1" parent="1" source="guard" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="k_guard" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e31" edge="1" parent="1" source="confirmed" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="refresh" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e32" edge="1" parent="1" source="confirmed" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="k_ai" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e33" edge="1" parent="1" source="fresh" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="c_send" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e34" edge="1" parent="1" source="fresh" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="k_fresh" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <object label="C" tooltip="Konektor pada halaman yang sama: C" id="c_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="2018" y="220" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="MariaDB: simpan sinyal PAPER&#xa;Status PENDING + ID unik&#xa;Entry, SL, TP &amp; masa berlaku" tooltip="engine.py: new_signal; services.py: save_signal(new=True). Default entry expiry 10 menit. INSERT menolak ID duplikat; hanya sinyal baru yang boleh dikirim." id="signal">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#EAF5EE;strokeColor=#59826B;" vertex="1">
+            <mxGeometry height="100" width="340" x="1870" y="315" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="inserted" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" value="Sinyal baru&#xa;berhasil disimpan?" vertex="1">
+          <mxGeometry height="110" width="280" x="1900" y="465" as="geometry" />
+        </mxCell>
+        <object label="J" tooltip="Konektor pada halaman yang sama: J" id="j_duplicate">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="2247" y="497" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="telegram_enabled" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;" value="Telegram aktif?" vertex="1">
+          <mxGeometry height="110" width="280" x="1900" y="625" as="geometry" />
+        </mxCell>
+        <object label="J" tooltip="Konektor pada halaman yang sama: J" id="j_disabled">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="2247" y="658" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="Kirim sinyal teks ke Telegram&#xa;Validasi konfigurasi; simpan status&#xa;SENT / UNKNOWN / CONFIG_ERROR&#xa;atau REJECTED" tooltip="services.py: deliver. Default TELEGRAM_ENABLED=false. Catat UNKNOWN sebelum request; hasil tidak pasti tidak dicoba ulang otomatis. Sinyal paper tetap tersimpan." id="telegram">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=parallelogram;perimeter=parallelogramPerimeter;size=0.10;fillColor=#EBF6FF;strokeColor=#4480A6;fontSize=16;" vertex="1">
+            <mxGeometry height="120" width="340" x="1870" y="790" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="J" tooltip="Konektor pada halaman yang sama: J" id="j_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="2018" y="965" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="analysis" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#EAF5EE;strokeColor=#59826B;" value="MariaDB&#xa;Simpan hasil analisis kandidat" vertex="1">
+          <mxGeometry height="80" width="340" x="1870" y="1060" as="geometry" />
+        </mxCell>
+        <object label="B" tooltip="Konektor pada halaman yang sama: B" id="b_next">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="2018" y="1200" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="scope" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#F1F5F9;strokeColor=none;align=left;spacing=14;fontSize=14;fontSize=14;" value="OPERASI &amp; PENANGANAN GAGAL&#xa;Data coin / AI gagal → HOLD. Error fatal menghentikan siklus; jadwal berikutnya mencoba lagi.&#xa;PAPER: simulasi, tanpa order ke bursa." vertex="1">
+          <mxGeometry height="122" width="459" x="1810" y="1280" as="geometry" />
+        </mxCell>
+        <mxCell id="e35" edge="1" parent="1" source="c_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="signal" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e36" edge="1" parent="1" source="signal" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="inserted" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e37" edge="1" parent="1" source="telegram" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="j_receive" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e38" edge="1" parent="1" source="j_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="analysis" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e39" edge="1" parent="1" source="analysis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="b_next" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e40" edge="1" parent="1" source="inserted" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="telegram_enabled" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e41" edge="1" parent="1" source="inserted" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontSize=12;" target="j_duplicate" value="Tidak: duplikat">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e42" edge="1" parent="1" source="telegram_enabled" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="telegram" value="Ya">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e43" edge="1" parent="1" source="telegram_enabled" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="j_disabled" value="Tidak">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <object label="H" tooltip="Konektor pada halaman yang sama: H" id="h_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="62" y="1464" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="coin_hold" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#EAF5EE;strokeColor=#59826B;fontSize=16;" value="Simpan HOLD + alasan&#xa;Lanjut pemeriksaan sisa coin" vertex="1">
+          <mxGeometry height="80" width="300" x="145" y="1445" as="geometry" />
+        </mxCell>
+        <object label="L" tooltip="Konektor pada halaman yang sama: L" id="n_hold">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="492" y="1464" as="geometry" />
+          </mxCell>
+        </object>
+        <object label="L" tooltip="Konektor pada halaman yang sama: L" id="l_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="637" y="1155" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="e44" edge="1" parent="1" source="l_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="more_coins" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e45" edge="1" parent="1" source="h_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="coin_hold" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e46" edge="1" parent="1" source="coin_hold" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="n_hold" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <object label="K" tooltip="Konektor pada halaman yang sama: K" id="k_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="642" y="1464" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="candidate_hold" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#EAF5EE;strokeColor=#59826B;fontSize=16;" value="HOLD + alasan penolakan&#xa;Simpan analisis kandidat" vertex="1">
+          <mxGeometry height="80" width="300" x="725" y="1445" as="geometry" />
+        </mxCell>
+        <object label="B" tooltip="Konektor pada halaman yang sama: B" id="b_hold">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1072" y="1464" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="e47" edge="1" parent="1" source="k_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="candidate_hold" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e48" edge="1" parent="1" source="candidate_hold" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="b_hold" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <object label="Z" tooltip="Konektor pada halaman yang sama: Z" id="z_receive">
+          <mxCell parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;" vertex="1">
+            <mxGeometry height="44" width="44" x="1222" y="1464" as="geometry" />
+          </mxCell>
+        </object>
+        <mxCell id="summary" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=16;" value="Akhiri siklus&#xa;Simpan ringkasan jika scan selesai" vertex="1">
+          <mxGeometry height="80" width="340" x="1305" y="1445" as="geometry" />
+        </mxCell>
+        <mxCell id="end" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=1;arcSize=50;fillColor=#17324D;strokeColor=#17324D;fontColor=#FFFFFF;fontStyle=1;fontSize=16;" value="SIKLUS SELESAI&#xa;Tunggu jadwal berikutnya" vertex="1">
+          <mxGeometry height="70" width="340" x="1780" y="1450" as="geometry" />
+        </mxCell>
+        <mxCell id="e49" edge="1" parent="1" source="z_receive" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="summary" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e50" edge="1" parent="1" source="summary" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=0;strokeColor=#4B6073;strokeWidth=1.6;endArrow=block;endFill=1;endSize=7;fontFamily=Arial;fontSize=15;fontColor=#17324D;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="end" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_caption" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;fontStyle=1;" value="LEGENDA" vertex="1">
+          <mxGeometry height="36" width="115" x="50" y="1555" as="geometry" />
+        </mxCell>
+        <mxCell id="legend0" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=1;arcSize=50;fillColor=#17324D;strokeColor=#17324D;fontColor=#FFFFFF;fontStyle=1;fontSize=14;spacing=0;" value="" vertex="1">
+          <mxGeometry height="36" width="58" x="170" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text0" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;" value="Mulai / selesai" vertex="1">
+          <mxGeometry height="36" width="210" x="240" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend1" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rounded=0;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=14;spacing=0;" value="" vertex="1">
+          <mxGeometry height="36" width="58" x="455" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text1" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;" value="Proses" vertex="1">
+          <mxGeometry height="36" width="210" x="525" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend2" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;rhombus;fillColor=#FFF5D6;strokeColor=#A67C22;spacing=0;fontSize=14;spacing=0;" value="" vertex="1">
+          <mxGeometry height="36" width="58" x="680" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text2" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;" value="Keputusan" vertex="1">
+          <mxGeometry height="36" width="210" x="750" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend3" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=parallelogram;perimeter=parallelogramPerimeter;size=0.10;fillColor=#EBF6FF;strokeColor=#4480A6;fontSize=14;spacing=0;" value="" vertex="1">
+          <mxGeometry height="36" width="58" x="935" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text3" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;" value="Input / output" vertex="1">
+          <mxGeometry height="36" width="210" x="1005" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend4" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;fillColor=#EAF5EE;strokeColor=#59826B;fontSize=14;spacing=0;" value="" vertex="1">
+          <mxGeometry height="36" width="58" x="1245" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text4" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;" value="Penyimpanan" vertex="1">
+          <mxGeometry height="36" width="210" x="1315" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend5" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;shape=process;size=0.045;fillColor=#F2F0FA;strokeColor=#8273A3;fontSize=14;spacing=0;" value="" vertex="1">
+          <mxGeometry height="36" width="58" x="1550" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text5" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;" value="Subproses" vertex="1">
+          <mxGeometry height="36" width="210" x="1620" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend6" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;ellipse;aspect=fixed;fillColor=#FFFFFF;strokeColor=#17324D;fontColor=#17324D;fontStyle=1;fontSize=14;spacing=0;" value="A" vertex="1">
+          <mxGeometry height="36" width="36" x="1845" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_text6" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=14;" value="Huruf sama = alur tersambung" vertex="1">
+          <mxGeometry height="36" width="370" x="1891" y="1554" as="geometry" />
+        </mxCell>
+        <mxCell id="foot" parent="1" style="whiteSpace=wrap;html=0;fontFamily=Arial;fontSize=17;fontColor=#172B40;strokeWidth=1.5;align=center;verticalAlign=middle;spacing=10;text;fillColor=none;strokeColor=none;align=left;spacing=0;fontSize=12;fontColor=#52657A;" value="* Scan normal: ≥120 detik setelah candle 15m ditutup dan candle belum diproses; mode manual once melewati batas waktu ini, tetap memakai lock.&#xa;Sumber: bot.py (cycle, evaluate, scan), engine.py (analyze, validate_market, paper_update), services.py (universe, confirm, deliver).  |  Konvensi simbol: ISO 5807; tata letak atas → bawah." vertex="1">
+          <mxGeometry height="42" width="2239" x="50" y="1600" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
