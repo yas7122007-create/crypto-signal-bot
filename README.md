@@ -83,10 +83,10 @@ Bot mendukung `AI_PROVIDER=ollama` (langsung) atau `AI_PROVIDER=hermes` (melalui
 
 Hermes menggunakan profil khusus `crypto-signal-bot` di `%LOCALAPPDATA%\hermes\profiles\crypto-signal-bot`. Konfigurasi sumbernya adalah `hermes-config.yaml`, dengan toolset CLI kosong dan model Ollama lokal. Profil utama Hermes tetap dapat digunakan untuk keperluan lain. Integrasi memakai [CLI JSONL resmi Hermes](https://hermes-agent.nousresearch.com/docs/reference/cli-commands), tanpa server tambahan.
 
-Hermes membutuhkan konteks minimal 64.000 token. Model Qwen 3 8B yang lama tidak memenuhi batas itu. [Qwen 3.5 4B](https://ollama.com/library/qwen3.5:4b) diunduh sekali (sekitar 3,4 GB), lalu dibuat alias dengan konteks 65.536 melalui `Hermes.Modelfile`:
+Hermes membutuhkan konteks minimal 64.000 token. Model Qwen 3 8B yang lama tidak memenuhi batas itu. [Qwen 3.5 9B](https://ollama.com/library/qwen3.5:9b) diunduh sekali (sekitar 6,6 GB), lalu dibuat alias dengan konteks 65.536 melalui `Hermes.Modelfile`:
 
 ```powershell
-& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" pull qwen3.5:4b
+& "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" pull qwen3.5:9b
 & "$env:LOCALAPPDATA\Programs\Ollama\ollama.exe" create crypto-hermes -f .\Hermes.Modelfile
 .\.venv\Scripts\python.exe setup_local.py hermes
 ```
