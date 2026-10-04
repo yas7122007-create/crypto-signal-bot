@@ -273,7 +273,10 @@ def hermes_executable():
 
 
 def hermes_home():
-    return Path(os.environ["LOCALAPPDATA"]) / "hermes" / "profiles" / "crypto-signal-bot"
+    localappdata = os.getenv("LOCALAPPDATA")
+    if localappdata:
+        return Path(localappdata) / "hermes" / "profiles" / "crypto-signal-bot"
+    return Path.home() / ".hermes" / "profiles" / "crypto-signal-bot"
 
 
 def hermes_confirm(prompt):

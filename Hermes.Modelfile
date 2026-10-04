@@ -1,4 +1,4 @@
-FROM qwen3.5:4b
+FROM qwen3.5:9b
 PARAMETER num_ctx 65536
 PARAMETER temperature 0
 PARAMETER num_predict 800
