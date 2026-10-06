@@ -4,6 +4,7 @@
 //! growing memory; if Binance then drops us, the reconnect path resynchronizes the books.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::io;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -17,8 +18,9 @@ use crate::binance::{
     envelope_from_snapshot, envelope_from_stream, snapshot_url, stream_url, unparsed,
 };
 use crate::event::{connection, now_ns, Envelope};
+use crate::features::FeatureConfig;
 use crate::pipeline::{Action, Pipeline};
-use crate::recorder::Recorder;
+use crate::recorder::{FeatureWriter, Recorder};
 
 const MAX_SNAPSHOT_BYTES: usize = 5 * 1024 * 1024;
 /// Depth limit=1000 costs 20 weight; one per second stays at half of Binance's 2400/min,
@@ -36,6 +38,9 @@ pub struct Config {
     pub rotate_after: Duration,
     pub rotate_bytes: u64,
     pub channel_capacity: usize,
+    pub features: FeatureConfig,
+    /// Optional NDJSON file of feature rows; replay of the recording reproduces it exactly.
+    pub features_out: Option<PathBuf>,
 }
 
 /// Reconnect delay: 1 s, 2 s, 4 s ... capped at 60 s.
@@ -44,47 +49,73 @@ pub fn backoff(attempt: u32) -> Duration {
 }
 
 pub async fn run(cfg: Config) -> io::Result<()> {
+    run_until(cfg, shutdown_signal()).await
+}
+
+/// The live loop, stopping cleanly when `shutdown` completes (tests pass their own).
+pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::Result<()> {
     let (tx, mut events) = mpsc::channel::<Envelope>(cfg.channel_capacity);
     // At most one request per symbol per reset; reconnects are >= 1 s apart, so even a
     // 10 s fetch timeout cannot queue more than a few hundred.
     let (snap_tx, snap_rx) = mpsc::channel::<String>(1024);
+    let mut features = cfg
+        .features_out
+        .as_deref()
+        .map(FeatureWriter::create)
+        .transpose()?;
     let mut recorder = Recorder::create(&cfg.out, cfg.rotate_after, cfg.rotate_bytes)?;
-    let mut pipeline = Pipeline::default();
+    let mut pipeline = Pipeline::new(cfg.features.clone());
     pipeline.handle(&recorder.record(connection(
         "session_start",
         "market-data record",
         now_ns(),
     ))?);
 
-    tokio::spawn(websocket(cfg.clone(), tx.clone()));
-    tokio::spawn(snapshots(cfg.rest_base.clone(), snap_rx, tx));
-
-    let mut status = interval(Duration::from_secs(10));
-    let shutdown = shutdown_signal();
-    tokio::pin!(shutdown);
-    loop {
-        tokio::select! {
-            Some(env) = events.recv() => {
-                // Record first: replay must see exactly what the pipeline saw.
-                let env = recorder.record(env)?;
-                for action in pipeline.handle(&env) {
-                    let Action::RequestSnapshot(symbol) = action;
-                    // Requests are deduplicated per symbol, so the queue only fills if the
-                    // fetcher died. Stop loudly instead of silently never syncing.
-                    if snap_tx.try_send(symbol).is_err() {
-                        recorder.flush()?;
-                        return Err(io::Error::other("snapshot fetcher stopped"));
+    let tasks = [
+        tokio::spawn(websocket(cfg.clone(), tx.clone())),
+        tokio::spawn(snapshots(cfg.rest_base.clone(), snap_rx, tx)),
+    ];
+    let result = async {
+        let mut status = interval(Duration::from_secs(10));
+        tokio::pin!(shutdown);
+        loop {
+            tokio::select! {
+                Some(env) = events.recv() => {
+                    // Record first: replay must see exactly what the pipeline saw.
+                    let env = recorder.record(env)?;
+                    let step = pipeline.handle(&env);
+                    if let (Some(out), Some(row)) = (features.as_mut(), &step.feature) {
+                        out.write(row)?;
+                    }
+                    for action in step.actions {
+                        let Action::RequestSnapshot(symbol) = action;
+                        // Requests are deduplicated per symbol, so the queue only fills if the
+                        // fetcher died. Stop loudly instead of silently never syncing.
+                        if snap_tx.try_send(symbol).is_err() {
+                            return Err(io::Error::other("snapshot fetcher stopped"));
+                        }
                     }
                 }
+                _ = status.tick() => {
+                    recorder.flush()?;
+                    if let Some(out) = features.as_mut() {
+                        out.flush()?;
+                    }
+                    eprintln!("{}", serde_json::json!({"status": pipeline.summary()}));
+                }
+                _ = &mut shutdown => return Ok(()),
             }
-            _ = status.tick() => {
-                recorder.flush()?;
-                eprintln!("{}", serde_json::json!({"status": pipeline.summary()}));
-            }
-            _ = &mut shutdown => break,
         }
     }
-    recorder.finish()
+    .await;
+    for task in tasks {
+        task.abort();
+    }
+    if let Some(out) = features.as_mut() {
+        out.flush()?;
+    }
+    let finished = recorder.finish();
+    result.and(finished)
 }
 
 /// Ctrl-C everywhere, plus SIGTERM on Unix so supervisors stop the recorder cleanly.

@@ -158,6 +158,30 @@ fn cumulative_qty(
         .collect()
 }
 
+/// One feature row, emitted after each depth event that leaves the book synced. Rows are a
+/// pure function of the recorded envelopes, so replay reproduces them byte for byte.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct FeatureSnapshot {
+    pub v: u16,
+    pub symbol: String,
+    /// Recorder sequence of the depth event behind this row (joins to the recording).
+    pub seq: u64,
+    pub recv_ts_ns: i64,
+    pub exchange_ts_ms: Option<i64>,
+    /// Feature clock the rolling windows were evaluated at.
+    pub feature_ts_ms: Option<i64>,
+    pub book_update_id: u64,
+    /// Recorder sequence of the snapshot that last synchronized this book.
+    pub synced_since_seq: u64,
+    #[serde(flatten)]
+    pub book: BookFeatures,
+    pub cvd: Option<Decimal>,
+    pub cvd_since_ms: Option<i64>,
+    pub deltas: Vec<WindowDelta>,
+    pub last_trade_ms: Option<i64>,
+    pub trade_gaps: u64,
+}
+
 fn div(numerator: Decimal, denominator: Decimal) -> Option<Decimal> {
     numerator.checked_div(denominator).map(|v| {
         v.round_dp_with_strategy(DIV_DP, RoundingStrategy::MidpointNearestEven)

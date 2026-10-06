@@ -10,6 +10,9 @@ use serde_json::{json, Value};
 use crate::binance::{parse_agg_trade, parse_depth, parse_snapshot};
 use crate::book::{DepthSync, SyncEvent};
 use crate::event::{Envelope, Kind};
+use crate::features::{
+    book_features, FeatureConfig, FeatureSnapshot, TradeFlow, TradeOutcome, FEATURE_SCHEMA_VERSION,
+};
 
 pub const MAX_AUDIT: usize = 1_000;
 /// A synced book with no diff for this long (by recorded receive time) is no longer trusted.
@@ -19,6 +22,13 @@ pub const STALE_DEPTH_NS: i64 = 30_000_000_000;
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
     RequestSnapshot(String),
+}
+
+/// Result of handling one envelope.
+#[derive(Debug, Default, PartialEq)]
+pub struct Step {
+    pub actions: Vec<Action>,
+    pub feature: Option<FeatureSnapshot>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -37,17 +47,6 @@ pub struct AuditEntry {
     pub event: AuditEvent,
 }
 
-/// Aggressor flow since the session started: the raw material for CVD later.
-#[derive(Debug, Default, Clone, PartialEq, Serialize)]
-pub struct TradeState {
-    pub last_id: Option<u64>,
-    pub trades: u64,
-    pub gaps: u64,
-    pub aggressive_buy_qty: Decimal,
-    pub aggressive_sell_qty: Decimal,
-    pub last_price: Option<Decimal>,
-}
-
 #[derive(Debug, Default, Clone, PartialEq, Serialize)]
 pub struct PipelineStats {
     pub events: u64,
@@ -60,8 +59,11 @@ pub struct PipelineStats {
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct Pipeline {
+    config: FeatureConfig,
     books: BTreeMap<String, DepthSync>,
-    trades: BTreeMap<String, TradeState>,
+    trades: BTreeMap<String, TradeFlow>,
+    synced_since: BTreeMap<String, u64>,
+    latest: BTreeMap<String, FeatureSnapshot>,
     audit: VecDeque<AuditEntry>,
     last_seq: Option<u64>,
     last_depth_ns: BTreeMap<String, i64>,
@@ -69,7 +71,14 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
-    pub fn handle(&mut self, env: &Envelope) -> Vec<Action> {
+    pub fn new(config: FeatureConfig) -> Self {
+        Self {
+            config,
+            ..Self::default()
+        }
+    }
+
+    pub fn handle(&mut self, env: &Envelope) -> Step {
         self.stats.events += 1;
         if env.kind == Kind::Connection && env.payload.get().contains("\"session_start\"") {
             self.last_seq = None; // Each recorder session numbers its events from zero.
@@ -80,9 +89,13 @@ impl Pipeline {
         self.last_seq = Some(env.seq);
         let mut actions = Vec::new();
         let payload = env.payload.get();
-        if matches!(env.kind, Kind::Depth | Kind::DepthSnapshot) {
+        let is_depth = matches!(env.kind, Kind::Depth | Kind::DepthSnapshot);
+        if is_depth {
             self.last_depth_ns
                 .insert(env.symbol.clone(), env.recv_ts_ns);
+            if let Some(ts) = env.exchange_ts_ms {
+                self.flow(&env.symbol).advance(ts);
+            }
         }
         match env.kind {
             Kind::Depth => match parse_depth(payload) {
@@ -123,24 +136,8 @@ impl Pipeline {
             },
             Kind::AggTrade => match parse_agg_trade(payload) {
                 Ok(trade) => {
-                    let state = self.trades.entry(env.symbol.clone()).or_default();
-                    let gap = state
-                        .last_id
-                        .filter(|last| trade.id != last + 1)
-                        .map(|last| last + 1);
-                    if state.last_id.is_some_and(|last| trade.id <= last) {
-                        return actions; // Duplicate or replayed trade; never double count flow.
-                    }
-                    state.trades += 1;
-                    state.last_id = Some(trade.id);
-                    state.last_price = Some(trade.price);
-                    if trade.buyer_is_maker {
-                        state.aggressive_sell_qty += trade.qty;
-                    } else {
-                        state.aggressive_buy_qty += trade.qty;
-                    }
-                    if let Some(expected) = gap {
-                        state.gaps += 1;
+                    if let TradeOutcome::Gap { expected } = self.flow(&env.symbol).on_trade(&trade)
+                    {
                         self.push(
                             env,
                             AuditEvent::TradeGap {
@@ -150,7 +147,11 @@ impl Pipeline {
                         );
                     }
                 }
-                Err(e) => self.malformed(env, e.to_string()),
+                Err(e) => {
+                    // The lost trade's flow is unknown: restart the CVD epoch.
+                    self.malformed(env, e.to_string());
+                    self.flow(&env.symbol).invalidate();
+                }
             },
             Kind::BookTicker => self.stats.book_tickers += 1,
             Kind::MarkPrice => self.stats.mark_prices += 1,
@@ -166,15 +167,53 @@ impl Pipeline {
                             push_bounded(&mut self.audit, env.seq, symbol, AuditEvent::Book(e));
                         }
                     }
-                    for trade in self.trades.values_mut() {
-                        trade.last_id = None; // Trades missed while offline are a known, logged gap.
+                    for flow in self.trades.values_mut() {
+                        flow.reset_session(); // Trades missed while offline: new CVD epoch.
                     }
                 }
                 self.push(env, AuditEvent::Connection { event });
             }
         }
         self.expire_stale_books(env);
-        actions
+        let feature = if is_depth { self.feature(env) } else { None };
+        if let Some(f) = &feature {
+            self.latest.insert(env.symbol.clone(), f.clone());
+        }
+        Step { actions, feature }
+    }
+
+    fn flow(&mut self, symbol: &str) -> &mut TradeFlow {
+        let windows = &self.config.cvd_windows_ms;
+        self.trades
+            .entry(symbol.to_string())
+            .or_insert_with(|| TradeFlow::new(windows))
+    }
+
+    /// Features only from a synced, uncrossed, fresh book; otherwise no row at all.
+    fn feature(&self, env: &Envelope) -> Option<FeatureSnapshot> {
+        let sync = self.books.get(&env.symbol)?;
+        let book = book_features(sync.book()?, &self.config.obi_levels)?;
+        let flow = self.trades.get(&env.symbol)?;
+        Some(FeatureSnapshot {
+            v: FEATURE_SCHEMA_VERSION,
+            symbol: env.symbol.clone(),
+            seq: env.seq,
+            recv_ts_ns: env.recv_ts_ns,
+            exchange_ts_ms: env.exchange_ts_ms,
+            feature_ts_ms: flow.clock_ms(),
+            book_update_id: sync.last_update_id()?,
+            synced_since_seq: self.synced_since.get(&env.symbol).copied()?,
+            book,
+            cvd: flow.epoch_cvd(),
+            cvd_since_ms: flow.cvd_since_ms,
+            deltas: flow.deltas(),
+            last_trade_ms: flow.last_trade_ms,
+            trade_gaps: flow.gaps,
+        })
+    }
+
+    pub fn config(&self) -> &FeatureConfig {
+        &self.config
     }
 
     /// Uses recorded receive times, so live and replay expire books at the same event.
@@ -224,7 +263,12 @@ impl Pipeline {
                 )
             })
             .collect();
-        json!({ "events": self.stats, "books": books, "trades": self.trades })
+        json!({
+            "events": self.stats,
+            "books": books,
+            "trades": self.trades,
+            "features": self.latest,
+        })
     }
 
     fn book_outcome(
@@ -234,6 +278,9 @@ impl Pipeline {
         actions: &mut Vec<Action>,
     ) {
         for e in outcome.events {
+            if matches!(e, SyncEvent::Synced { .. }) {
+                self.synced_since.insert(env.symbol.clone(), env.seq);
+            }
             self.push(env, AuditEvent::Book(e));
         }
         if outcome.request_snapshot {

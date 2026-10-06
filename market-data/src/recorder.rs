@@ -13,6 +13,7 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 
 use crate::event::Envelope;
+use crate::features::FeatureSnapshot;
 
 const FLUSH_EVERY_EVENTS: u32 = 1_000;
 const FLUSH_EVERY: Duration = Duration::from_secs(1);
@@ -127,6 +128,30 @@ pub struct ReplayStats {
 }
 
 /// Recording files in replay order.
+/// Feature rows as plain NDJSON, one per line, for evaluation runs and parity checks.
+/// Never overwrites an existing file. Not rotated: enable it for bounded runs only.
+pub struct FeatureWriter {
+    out: BufWriter<File>,
+}
+
+impl FeatureWriter {
+    pub fn create(path: &Path) -> io::Result<Self> {
+        let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        Ok(Self {
+            out: BufWriter::new(file),
+        })
+    }
+
+    pub fn write(&mut self, row: &FeatureSnapshot) -> io::Result<()> {
+        serde_json::to_writer(&mut self.out, row).map_err(io::Error::other)?;
+        self.out.write_all(b"\n")
+    }
+
+    pub fn flush(&mut self) -> io::Result<()> {
+        self.out.flush()
+    }
+}
+
 pub fn recording_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)?
         .filter_map(|entry| entry.ok().map(|e| e.path()))

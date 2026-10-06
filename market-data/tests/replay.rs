@@ -80,7 +80,7 @@ fn live(dir: &std::path::Path, rotate_bytes: u64) -> (Pipeline, Vec<Action>) {
     let mut actions = Vec::new();
     for env in session() {
         let env = recorder.record(env).unwrap();
-        actions.extend(pipeline.handle(&env));
+        actions.extend(pipeline.handle(&env).actions);
     }
     recorder.finish().unwrap();
     (pipeline, actions)
@@ -89,7 +89,7 @@ fn live(dir: &std::path::Path, rotate_bytes: u64) -> (Pipeline, Vec<Action>) {
 fn replayed(dir: &std::path::Path) -> (Pipeline, Vec<Action>, market_data::recorder::ReplayStats) {
     let mut pipeline = Pipeline::default();
     let mut actions = Vec::new();
-    let stats = replay(dir, |env| actions.extend(pipeline.handle(&env))).unwrap();
+    let stats = replay(dir, |env| actions.extend(pipeline.handle(&env).actions)).unwrap();
     (pipeline, actions, stats)
 }
 
