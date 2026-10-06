@@ -1,4 +1,4 @@
-"""Runnable checks: python check.py [--db] [--hermes] [--scheduler]. No orders/messages."""
+"""Runnable checks: python check.py [--db] [--hermes] [--scheduler] [--nemotron-live]. No orders/messages."""
 from dataclasses import asdict
 from contextlib import redirect_stderr
 from io import StringIO
@@ -64,7 +64,9 @@ def nemotron_checks(candidate, rules):
     from engine import signal_id
     from services import signal_text
     key = "nvapi-SECRET_TEST_KEY"
-    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": key, "NEMOTRON_TIMEOUT_SECONDS": "30"}
+    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": key, "NEMOTRON_TIMEOUT_SECONDS": "30",
+           "NVIDIA_BASE_URL": reasoning.DEFAULT_URL, "NEMOTRON_MODEL": reasoning.DEFAULT_MODEL,
+           "NEMOTRON_MAX_RETRIES": "2", "NEMOTRON_MAX_AGE_SECONDS": "600", "NEMOTRON_THINKING": "false"}
     url = "https://integrate.api.nvidia.com/v1/chat/completions"
     request = httpx.Request("POST", url)
     answer = dict(thesis="Tren 4h/1h dan breakout 15m selaras", bullish_evidence=["Volume relatif tinggi"],
@@ -78,14 +80,17 @@ def nemotron_checks(candidate, rules):
                 {"finish_reason": finish, "message": {"content": content if content is not None else json.dumps(answer)}}]}
         return httpx.Response(status, json=body, headers=headers, request=request)
 
-    def run(responses, extra=None):
-        frozen = json.dumps(candidate, sort_keys=True)
+    def run(responses, extra=None, polls=(), subject=None):
+        subject = subject or candidate
+        frozen = json.dumps(subject, sort_keys=True)
         with patch.dict("os.environ", {**env, **(extra or {})}), \
                 patch("reasoning.httpx.post", side_effect=responses) as post, \
+                patch("reasoning.httpx.get", side_effect=list(polls)) as get, \
                 patch("reasoning.time.sleep") as sleep:
-            result = reasoning.explain(candidate, {"sample_count": 0, "average_net_r": None, "recent_cases": []})
-        # The explanation layer must never touch the deterministic decision.
-        assert json.dumps(candidate, sort_keys=True) == frozen
+            result = reasoning.explain(subject, {"sample_count": 0, "average_net_r": None, "recent_cases": []})
+        # The explanation layer must never touch the deterministic decision (action, entry, stop, target).
+        assert json.dumps(subject, sort_keys=True) == frozen
+        run.get = get
         return result, post, sleep
 
     # Target provider needs no Ollama, Hermes or Qwen settings.
@@ -134,7 +139,28 @@ def nemotron_checks(candidate, rules):
     assert result["status"] == "DEGRADED" and result["error"] == "ReadTimeout"
     result, _, _ = run(RuntimeError("boom " + key))
     assert result["status"] == "DEGRADED"
+    result, post, _ = run([reply(status=403)])
+    assert result["status"] == "DEGRADED" and result["error"] == "HTTP 403" and post.call_count == 1
+    result, post, _ = run([reply(status=204, body={})])
+    assert result["status"] == "DEGRADED"
     print("PASS: Nemotron rate limit backoff, 5xx retry, invalid credentials, timeout, unexpected errors")
+
+    pending = lambda rid="req-123", wait=None: reply(status=202, body={}, headers={
+        **({"NVCF-REQID": rid} if rid is not None else {}), **({"NVCF-POLL-SECONDS": wait} if wait else {})})
+    result, post, sleep = run([pending()], polls=[pending(), reply()])
+    assert result["status"] == "OK" and post.call_count == 1 and run.get.call_count == 2
+    assert run.get.call_args.args[0] == "https://integrate.api.nvidia.com/v1/status/req-123"
+    assert run.get.call_args.kwargs["headers"]["Authorization"] == "Bearer " + key
+    result, _, _ = run([pending()], polls=[pending()] * 200)
+    assert result["status"] == "DEGRADED" and run.get.call_count <= 120  # Bounded polling.
+    for rid in (None, "../../v2/x", ""):
+        result, _, _ = run([pending(rid)])
+        assert result["status"] == "DEGRADED" and not run.get.called
+    result, _, _ = run([pending()], polls=[reply(status=422, body={"detail": "bad"})])
+    assert result["status"] == "DEGRADED" and result["error"] == "HTTP 422"
+    result, _, _ = run([pending(wait="60")], polls=[reply()])
+    assert result["status"] == "OK" and run.get.called  # Server poll hint is capped at 5 s.
+    print("PASS: Nemotron 202 async polling, bounded wait, request id validation, poll errors")
 
     with patch.dict("os.environ", {**env, "NVIDIA_API_KEY": ""}), patch("reasoning.httpx.post") as post:
         result = reasoning.explain(candidate, {})
@@ -164,6 +190,8 @@ def nemotron_checks(candidate, rules):
     now = fresh["generated_at_ms"] + 1000
     assert reasoning.mark_stale(fresh, signal, now)["status"] == "OK"
     assert reasoning.mark_stale(fresh, signal, now + 3_600_000)["status"] == "STALE"
+    assert reasoning.mark_stale(fresh, signal, now - 30_000)["status"] == "OK"  # Small clock skew.
+    assert reasoning.mark_stale(fresh, signal, now - 120_000)["status"] == "STALE"
     assert reasoning.mark_stale(fresh, {**signal, "candle_ms": 900_000}, now)["status"] == "STALE"
     assert signal["action"] == candidate["action"] and signal["entry"] == candidate["entry"]
     text = signal_text(signal)
@@ -171,6 +199,19 @@ def nemotron_checks(candidate, rules):
     signal["reasoning"] = reasoning.mark_stale(fresh, signal, now + 3_600_000)
     text = signal_text(signal)
     assert "Nemotron STALE" in text and "Setup LONG sesuai" not in text
+    with patch.dict("os.environ", {"NEMOTRON_MAX_AGE_SECONDS": "broken"}):
+        assert reasoning.mark_stale(fresh, signal, now)["status"] == "STALE"
+    degraded, _, _ = run(httpx.ReadTimeout("x"))
+    text = signal_text({**signal, "reasoning": degraded})
+    assert "Ringkasan engine (Nemotron DEGRADED)" in text and key not in text
+    with patch.dict("os.environ", {**env, "NVIDIA_API_KEY": ""}):
+        disabled = reasoning.explain(candidate, {})
+    assert "Nemotron DISABLED" in signal_text({**signal, "reasoning": disabled})
+    legacy = {k: v for k, v in signal.items() if k != "reasoning"}
+    assert "AI: Model lokal" in signal_text({**legacy, "ai": {"decision": "CONFIRM", "reason": "Model lokal setuju"}})
+    short = {**candidate, "action": "SHORT", "entry": 100.0, "stop": 105.0, "target": 90.0}
+    assert run([reply()], subject=short)[0]["status"] == "OK"
+    assert run(RuntimeError("x"), subject={"symbol": "BROKENUSDT"})[0]["status"] == "DEGRADED"
     print("PASS: stale Nemotron result suppressed, deterministic signal unchanged, Telegram text")
 
     logs = StringIO()
@@ -191,6 +232,7 @@ def nemotron_checks(candidate, rules):
 
 
 def scan_checks(candidate, rules):
+    import time
     import httpx
     import bot
     coins = [dict(symbol=s, group="volume", tick="0.01") for s in ("AAAUSDT", "BBBUSDT")]
@@ -207,19 +249,32 @@ def scan_checks(candidate, rules):
                 patch("reasoning.httpx.post", **post_options) as post, patch("bot.confirm") as legacy:
             lock.return_value.__enter__.return_value = True
             api = api_class.return_value
-            api.now.return_value = candidate["candle_ms"] + 960_000
+            api.now.return_value = int(time.time() * 1000)  # Exchange clock, as in production.
             api.universe.return_value = (coins, {})
             legacy.return_value = {"decision": "HOLD", "reason": "Model lokal ragu"}
             summary = bot.scan.fn(force=True)
             issued = [c.args[1] for c in save.call_args_list if c.kwargs.get("new")]
             return summary, issued, post, deliver, legacy
 
-    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": "nvapi-x", "MAX_OPEN_SIGNALS": "3"}
+    import reasoning
+    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": "nvapi-x", "MAX_OPEN_SIGNALS": "3",
+           "NVIDIA_BASE_URL": reasoning.DEFAULT_URL, "NEMOTRON_MAX_RETRIES": "2",
+           "NEMOTRON_TIMEOUT_SECONDS": "30", "NEMOTRON_MAX_AGE_SECONDS": "600"}
     summary, issued, post, deliver, legacy = scan(env, side_effect=httpx.ReadTimeout("down"))
     assert summary["paper_signals"] == 2 and deliver.call_count == 2 and not legacy.called
     assert post.call_count == 1  # Circuit breaker: the second candidate skips the failed provider.
     assert [s["reasoning"]["status"] for s in issued] == ["DEGRADED", "DEGRADED"]
     assert all(s["action"] == candidate["action"] and s["entry"] == candidate["entry"] for s in issued)
+    ok = httpx.Response(200, request=httpx.Request("POST", "https://integrate.api.nvidia.com/v1/chat/completions"),
+                        json={"model": "m", "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(dict(
+                            thesis="t", bullish_evidence=[], bearish_evidence=["Harga bisa turun"],
+                            contradictions=["15m melawan 4h"], forecast_consistency="CONFLICTING",
+                            uncertainty_summary="u", risk_summary="r", operator_explanation="e"))}}]})
+    summary, issued, post, _, _ = scan(env, return_value=ok)
+    assert summary["paper_signals"] == 2 and post.call_count == 2
+    assert all(s["reasoning"]["status"] == "OK" and s["action"] == candidate["action"] for s in issued)
+    assert all((s["entry"], s["stop"], s["target"]) == (candidate["entry"], candidate["stop"], candidate["target"])
+               for s in issued)  # Contradictions are reported, never acted on.
     summary, issued, post, _, _ = scan(env, gate={"side_effect": ValueError("Spread terlalu lebar")})
     assert summary["paper_signals"] == 0 and not post.called  # Risk gate failure: Nemotron is never asked.
     summary, issued, post, _, legacy = scan({**env, "AI_PROVIDER": "ollama"})
@@ -412,6 +467,38 @@ def main():
     print("PASS: AI schema and timeout fail closed; dry-run never sends Telegram")
     nemotron_checks({**long, "market": dict(bid=120.59, ask=120.61, spread_bps=1.6,
                                             funding_rate=0.0001, net_rr_estimate=1.8)}, rules)
+
+    if "--nemotron-live" in sys.argv:
+        # Optional smoke test against NVIDIA's hosted API; needs NVIDIA_API_KEY in .env. Never prints the key.
+        import os
+        import httpx
+        import reasoning
+        from services import load_dotenv, ROOT
+        load_dotenv(ROOT / ".env")
+        if not os.getenv("NVIDIA_API_KEY", "").strip():
+            print("SKIP: NVIDIA_API_KEY kosong; uji live Nemotron tidak dijalankan")
+        else:
+            sizes, statuses = [], []
+            real_post, real_get = httpx.post, httpx.get
+
+            def measure(call):
+                def wrapped(*args, **kwargs):
+                    response = call(*args, **kwargs)
+                    sizes.append(len(response.content))
+                    statuses.append(response.status_code)
+                    return response
+                return wrapped
+            sample = {**long, "market": dict(bid=120.59, ask=120.61, spread_bps=1.6, funding_rate=0.0001,
+                                             net_rr_estimate=1.8)}
+            with patch.dict("os.environ", {"AI_PROVIDER": "nemotron"}), \
+                    patch("reasoning.httpx.post", measure(real_post)), patch("reasoning.httpx.get", measure(real_get)):
+                result = reasoning.explain(sample, {"sample_count": 0, "average_net_r": None, "recent_cases": []})
+            print(json.dumps({"status": result["status"], "error": result["error"], "latency_ms": result["latency_ms"],
+                              "model_version": result["model_version"], "http_statuses": statuses,
+                              "response_bytes": sizes, "requests": len(statuses),
+                              "schema_ok": result["source"] == "nemotron"}))
+            assert result["status"] == "OK", "Nemotron live gagal; lihat error di atas"
+            print("PASS: Nemotron live menghasilkan ReasoningResult yang valid")
 
     if "--hermes" in sys.argv:
         from services import hermes_confirm

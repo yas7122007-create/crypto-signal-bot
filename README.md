@@ -90,8 +90,11 @@ Nemotron tidak memutuskan apa pun: ia tidak dapat mengubah arah, harga, atau has
 | Tersedia | Penjelasan Nemotron disimpan di sinyal dan dikirim ke Telegram |
 | Timeout, error 5xx, respons rusak | `DEGRADED`: ringkasan deterministik engine; sisa siklus scan melewati Nemotron |
 | Rate limit 429 | Retry terbatas mengikuti `Retry-After` dalam batas `NEMOTRON_TIMEOUT_SECONDS` |
+| HTTP 202 (pending) | Polling `/status/{NVCF-REQID}` sesuai dokumentasi NVIDIA, tanpa mengirim ulang request, dalam batas waktu yang sama |
 | Kunci kosong | `DISABLED`: tanpa panggilan jaringan; sinyal kuantitatif tetap berjalan |
 | Hasil kedaluwarsa | `STALE`: penjelasan tidak ditampilkan (`NEMOTRON_MAX_AGE_SECONDS`) |
+
+Uji live opsional (memerlukan `NVIDIA_API_KEY` di `.env`; kunci tidak pernah dicetak): `python check.py --nemotron-live` mencetak status HTTP, latency, ukuran respons, jumlah request, dan apakah schema valid.
 
 `AI_PROVIDER=mock` menghasilkan ringkasan deterministik tanpa jaringan untuk demo atau pengujian. Kunci API hanya dibaca dari `.env` dan tidak pernah ditulis ke log, hasil, atau pesan error.
 

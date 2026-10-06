@@ -136,36 +136,69 @@ class NemotronProvider:
         headers = {"Authorization": "Bearer " + self.key, "Accept": "application/json"}
         deadline = time.monotonic() + self.timeout
         for attempt in range(self.retries + 1):
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError("Batas waktu Nemotron habis")
-            response = httpx.post(self.url + "/chat/completions", headers=headers, json=body, timeout=remaining)
+            response = httpx.post(self.url + "/chat/completions", headers=headers, json=body,
+                                  timeout=remaining(deadline))
             if response.status_code in (429, 500, 502, 503, 504) and attempt < self.retries:
-                try:
-                    wait = float(response.headers.get("Retry-After", 2 ** attempt))
-                except ValueError:
-                    wait = 2 ** attempt
-                if 0 <= wait < deadline - time.monotonic():
+                wait = header_seconds(response, "Retry-After", 2 ** attempt)
+                if wait < deadline - time.monotonic():
                     time.sleep(wait)
                     continue
             response.raise_for_status()
             break
-        choice = response.json()["choices"][0]
+        if response.status_code == 202:
+            response = self.poll(response, headers, deadline)
+        if response.status_code != 200:
+            raise ValueError(f"Status Nemotron tidak didukung: {response.status_code}")
+        data = response.json()
+        choice = data["choices"][0]
         if choice.get("finish_reason") == "length":
             raise ValueError("Jawaban Nemotron terpotong")
-        version = str(response.json().get("model") or self.name)[:120]
+        version = str(data.get("model") or self.name)[:120]
         return parse_result(choice["message"]["content"]), version
+
+    def poll(self, response, headers, deadline):
+        # Documented NVIDIA async mode: 202 means pending; poll /status/{NVCF-REQID} until 200.
+        # The request is never re-sent, so a slow completion cannot be billed or answered twice.
+        request_id = response.headers.get("NVCF-REQID", "")
+        if not re.fullmatch(r"[A-Za-z0-9-]{1,128}", request_id):
+            raise ValueError("Nemotron 202 tanpa request id yang valid")
+        for _ in range(120):  # Bounded even if the clock is frozen; the deadline normally ends it first.
+            if response.status_code != 202:
+                return response
+            wait = min(header_seconds(response, "NVCF-POLL-SECONDS", 1), 5)
+            if wait >= deadline - time.monotonic():
+                break
+            time.sleep(wait)
+            response = httpx.get(f"{self.url}/status/{request_id}", headers=headers, timeout=remaining(deadline))
+            response.raise_for_status()
+        raise TimeoutError("Nemotron masih pending saat batas waktu habis")
+
+
+def remaining(deadline):
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("Batas waktu Nemotron habis")
+    return left
+
+
+def header_seconds(response, name, default):
+    try:
+        value = float(response.headers.get(name, default))
+    except ValueError:
+        return default
+    return value if 0 <= value <= 3600 else default
 
 
 def explain(candidate, history, skip=None):
     """Always returns a ReasoningResult dict; any provider failure becomes a degraded result."""
     provider, start = provider_name(), time.monotonic()
     ev = evidence(candidate, history)
-    meta = dict(symbol=candidate.get("symbol"), signal_id=signal_id(candidate), decision_authority="quant_engine",
+    meta = dict(symbol=candidate.get("symbol"), signal_id=None, decision_authority="quant_engine",
                 model_name=provider, model_version=None, status="OK", error=None)
     key = os.getenv("NVIDIA_API_KEY", "").strip()
     fields = None
     try:
+        meta["signal_id"] = signal_id(candidate)
         if provider == "mock":
             fields, meta["model_version"] = MockReasoningProvider().explain(ev)
         elif provider == "nemotron":
@@ -186,7 +219,13 @@ def explain(candidate, history, skip=None):
         meta.update(status="DEGRADED", error=error.replace(key, "***") if key else error)
     source = "nemotron" if fields else "deterministic"
     if fields is None:
-        fields = MockReasoningProvider().explain(ev)[0]
+        try:
+            fields = MockReasoningProvider().explain(ev)[0]
+        except Exception:
+            fields = dict(thesis="Ringkasan tidak tersedia", bullish_evidence=[], bearish_evidence=[],
+                          contradictions=[], forecast_consistency="NOT_AVAILABLE",
+                          uncertainty_summary="Ringkasan tidak tersedia", risk_summary="Lihat entry/SL/TP engine",
+                          operator_explanation="Sinyal dari engine kuantitatif; ringkasan tidak tersedia")
     elif provider == "mock":
         source = "deterministic"
     result = {**fields, **meta, "source": source, "latency_ms": round((time.monotonic() - start) * 1000),
@@ -197,9 +236,14 @@ def explain(candidate, history, skip=None):
 
 
 def mark_stale(result, signal, now_ms):
-    max_age = bounded("NEMOTRON_MAX_AGE_SECONDS", "600", 30, 3600) * 1000
-    fresh = (result.get("signal_id") == signal_id(signal)
-             and 0 <= now_ms - result.get("generated_at_ms", 0) <= max_age)
+    try:
+        max_age = bounded("NEMOTRON_MAX_AGE_SECONDS", "600", 30, 3600) * 1000
+        fresh = (result.get("signal_id") == signal_id(signal)
+                 # Exchange time vs local clock: tolerate a minute of skew instead of marking everything stale.
+                 and -60_000 <= now_ms - result.get("generated_at_ms", 0) <= max_age)
+    except (ValueError, KeyError, TypeError):
+        # A bad reasoning setting must hide the explanation, never block the deterministic signal.
+        fresh = False
     if result.get("status") == "OK" and not fresh:
         return {**result, "status": "STALE"}
     return result
