@@ -37,3 +37,21 @@ jobs:
           if git grep -nIE "$pattern" -- . ':!.github/workflows/ci.yml'; then
             echo "::error::Possible secret committed"; exit 1
           fi
+
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: market-data
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: market-data
+      - run: cargo fmt --check
+      - run: cargo clippy --all-targets --locked -- -D warnings
+      # Offline: parsing, L2 sync, recorder and replay tests need no Binance access.
+      - run: cargo test --locked

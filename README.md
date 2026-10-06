@@ -156,3 +156,22 @@ Lihat log di `runtime/startup.log`, status layanan dengan `setup_local.py doctor
 `requirements.txt` membatasi SQLAlchemy di bawah 2.1 karena [bug kompatibilitas scheduler Prefect](https://github.com/PrefectHQ/prefect/issues/23199). Status API sehat saja belum membuktikan jadwal bekerja; pastikan flow run terjadwal muncul dan selesai di dashboard.
 
 Setelah bot berjalan, `python check.py --scheduler` dari virtual environment memeriksa bahwa scheduler aktif dan sudah membuat flow run. Pemeriksaan ini hanya membaca status.
+
+## Rust market data (Phase 1)
+
+`market-data/` adalah layanan Rust untuk data publik Binance USD-M Futures: WebSocket gabungan (depth 100 ms, aggTrade, bookTicker, markPrice), sinkronisasi local L2 order book dengan snapshot + diff sesuai aturan Binance (`U <= lastUpdateId <= u`, lalu `pu` harus sama dengan `u` sebelumnya), recorder, dan replay deterministik. Tidak ada API key, endpoint bertanda tangan, maupun endpoint order. Arsitektur target dan urutan fase ada di [docs/architecture-v2.md](docs/architecture-v2.md).
+
+```bash
+cd market-data
+cargo run --release -- record --symbols BTCUSDT,ETHUSDT --out ../recordings
+cargo run --release -- replay --input ../recordings --audit
+```
+
+- Gap urutan, book bersilang, atau diff rusak membatalkan book dan meminta snapshot baru; book yang tidak valid tidak pernah dipakai.
+- Putus koneksi dicatat sebagai event, sehingga replay membatalkan book pada titik yang sama seperti live. Reconnect memakai backoff 1–60 detik; koneksi tanpa pesan selama 30 detik dianggap stale.
+- Snapshot REST (bobot 20) diambil maksimal satu per detik, setengah dari batas 2400/menit, dan mengikuti `Retry-After` saat 429/418.
+- Rekaman: `events-<waktu>-<seq>.ndjson.gz`, rotasi per jam atau 512 MB, flush tiap detik. Setelah crash, replay membaca hingga flush terakhir dan melaporkan file terpotong; baris rusak di tengah file menghentikan replay.
+- Uji: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (offline, tanpa akses Binance).
+
+Layanan ini belum terhubung ke bot Python; antarmuka Python/Rust adalah Fase 4.
+

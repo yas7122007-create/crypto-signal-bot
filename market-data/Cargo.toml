@@ -2,7 +2,6 @@
 name = "market-data"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80"
 description = "Binance USD-M Futures public market-data ingestion, local L2 book sync, recorder and deterministic replay. No trading endpoints."
 publish = false
 
