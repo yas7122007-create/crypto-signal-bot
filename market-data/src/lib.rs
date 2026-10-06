@@ -4,6 +4,7 @@
 pub mod binance;
 pub mod book;
 pub mod event;
+pub mod features;
 pub mod live;
 pub mod pipeline;
 pub mod recorder;
