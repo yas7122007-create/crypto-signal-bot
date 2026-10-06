@@ -159,7 +159,7 @@ Lihat log di `runtime/startup.log`, status layanan dengan `setup_local.py doctor
 
 Setelah bot berjalan, `python check.py --scheduler` dari virtual environment memeriksa bahwa scheduler aktif dan sudah membuat flow run. Pemeriksaan ini hanya membaca status.
 
-## Rust market data (Phase 1)
+## Rust market data (Phase 1–2)
 
 `market-data/` adalah layanan Rust untuk data publik Binance USD-M Futures: WebSocket gabungan (depth 100 ms, aggTrade, bookTicker, markPrice), sinkronisasi local L2 order book dengan snapshot + diff sesuai aturan Binance (`U <= lastUpdateId <= u`, lalu `pu` harus sama dengan `u` sebelumnya), recorder, dan replay deterministik. Tidak ada API key, endpoint bertanda tangan, maupun endpoint order. Arsitektur target dan urutan fase ada di [docs/architecture-v2.md](docs/architecture-v2.md).
 
@@ -174,7 +174,17 @@ cargo run --release -- replay --input ../recordings --audit
 - Putus koneksi dicatat sebagai event, sehingga replay membatalkan book pada titik yang sama seperti live. Reconnect memakai backoff 1–60 detik yang baru direset setelah koneksi bertahan 60 detik; koneksi tanpa pesan selama 30 detik dianggap stale.
 - Snapshot REST (bobot 20) diambil maksimal satu per detik, setengah dari batas 2400/menit, dan mengikuti `Retry-After` saat 429/418.
 - Rekaman: `events-<waktu>-<seq>.ndjson.gz`, rotasi per jam atau 512 MB, flush tiap detik. Setelah crash, replay membaca hingga flush terakhir dan melaporkan file terpotong; baris rusak di tengah file menghentikan replay.
-- Uji: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (offline, tanpa akses Binance).
+- Uji: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (offline, tanpa akses Binance; uji live-loop memakai server palsu di 127.0.0.1, bukan Binance).
+
+### Fitur order-flow (Phase 2)
+
+```bash
+cargo run --release -- record --symbols BTCUSDT --out ../recordings --features-out ../features-live.ndjson
+cargo run --release -- replay --input ../recordings --features-out ../features-replay.ndjson
+# Opsional: --cvd-windows-ms 1000,5000,15000,60000 --obi-levels 10,50 (nilai default)
+```
+
+Satu baris fitur dikeluarkan setelah setiap event depth yang membuat book tersinkron: mid, spread, spread (bps), microprice, OBI top-N, CVD epoch, dan delta CVD per jendela, beserta `seq`, `book_update_id` dan `synced_since_seq` untuk audit. Replay dari rekaman yang sama menghasilkan file fitur yang identik byte demi byte. Nilai yang tidak bisa dihitung dari data yang tepercaya ditulis `null`, bukan ditebak. Definisi lengkap ada di [docs/architecture-v2.md](docs/architecture-v2.md#phase-2-order-flow-features). File fitur tidak dirotasi; aktifkan hanya untuk run evaluasi yang terbatas.
 
 Layanan ini belum terhubung ke bot Python; antarmuka Python/Rust adalah Fase 4.
 

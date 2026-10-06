@@ -7,8 +7,8 @@ Paper trading only. No component may create, cancel or modify orders, change lev
 ```
 Binance Futures WebSocket
   -> Rust market data (market-data/)          Phase 1   implemented; live Binance run not yet verified
-  -> Local L2 order book                      Phase 1/2 sync implemented, order-flow features pending
-  -> Order-flow engine (CVD, OBI, microprice) Phase 2   aggressor volume only
+  -> Local L2 order book                      Phase 1   sync implemented
+  -> Order-flow engine (CVD, OBI, microprice) Phase 2   implemented; live Binance run not yet verified
   -> Recorder + deterministic replay          Phase 3   implemented (gzip NDJSON)
   -> Python/Rust interface                    Phase 4   not started (gRPC only if justified)
   -> Feature engine + data-quality checks     Phase 5   not started
@@ -52,6 +52,29 @@ Once enough replay data exists, measure each configuration on the same replayed 
 4. Quant + PatchTST + Toto + Nemotron
 
 Metrics: candidate precision, false-positive reduction, win rate, expectancy, average net R, drawdown, calibration, confidence reliability, rejection quality, contradiction detection, latency, and behavior in degraded modes. A layer that does not improve these stays off by default.
+
+## Phase 2 order-flow features
+
+Computed in `market-data/src/features.rs` inside the one `Pipeline` that both live ingestion and replay use, so replaying a recording reproduces the feature rows byte for byte. All arithmetic is exact `Decimal`; each division is rounded half-to-even to 16 decimals. A value that cannot be computed from trustworthy state is `null`.
+
+**When a row is emitted.** After each depth diff or snapshot that leaves the book synced and uncrossed. No row while the book is buffering, after a sequence gap, a crossed or malformed update, a disconnect, or 30 s without a depth diff. Each row carries `seq` (recorder sequence of the depth event), `recv_ts_ns`, `exchange_ts_ms`, `feature_ts_ms`, `book_update_id` and `synced_since_seq` (the snapshot that started the current sync epoch).
+
+| Feature | Definition |
+|---|---|
+| `mid` | `(best_bid + best_ask) / 2` |
+| `spread`, `spread_bps` | `best_ask - best_bid`; `spread / mid * 10 000` |
+| `microprice` | `(bid * ask_qty + ask * bid_qty) / (bid_qty + ask_qty)`, top of book |
+| `obi[N]` | `(B_N - A_N) / (B_N + A_N)`, `B_N`/`A_N` = total quantity of the best N price levels per side |
+| `cvd` | Signed aggressor quantity since `cvd_since_ms`. `aggTrade.m == false` (buyer aggressed) adds `q`; `m == true` subtracts `q` |
+| `deltas[W]` | Signed aggressor quantity of trades with `T` in `(t - W, t]`, `t = feature_ts_ms` |
+
+**Depth policy (OBI).** N counts price levels, not a price distance. `obi[N]` is `null` unless both sides hold at least N levels, so a thin or rebuilding book never reads as balanced. N is capped at 500: the REST snapshot carries 1000 levels and beyond that the local book only knows levels that changed since the snapshot. Defaults are N = 10 and 50 (PRD `obi_top10`, `obi_top50`).
+
+**CVD epochs and windows.** The epoch restarts at every point where trades may have been missed: session start, disconnect, an `aggTrade` id gap, or a malformed trade. Duplicate ids are ignored. `t` is the latest exchange time seen for the symbol (trade `T` or depth `E`) and never moves back. A window is reported only when `t - W >= cvd_since_ms`, so it never mixes epochs or covers time before the first trade of the epoch. Defaults are 1 s, 5 s, 15 s and 1 m (PRD feature table).
+
+**Bounds.** Each window keeps a running sum over one shared deque per symbol, so a trade or clock step costs amortized O(windows). The deque holds at most 100 000 trades; when it overflows, windows that still needed the evicted trades report `null` until they are covered again. OBI costs O(max N) per row. Measured on a synthetic stream in release mode: about 490 000 events/s including JSON parsing (`cargo test --release --test features -- --ignored`).
+
+**Known limits.** A silent aggTrade stream while depth keeps flowing is indistinguishable from no trades; `last_trade_ms` lets a consumer judge that. Features are not yet consumed by Python (Phase 4).
 
 ## Current Nemotron evidence
 
