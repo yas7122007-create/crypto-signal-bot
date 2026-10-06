@@ -5,3 +5,4 @@ pub mod binance;
 pub mod book;
 pub mod event;
 pub mod pipeline;
+pub mod recorder;
