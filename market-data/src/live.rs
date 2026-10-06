@@ -58,36 +58,32 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
     // At most one request per symbol per reset; reconnects are >= 1 s apart, so even a
     // 10 s fetch timeout cannot queue more than a few hundred.
     let (snap_tx, snap_rx) = mpsc::channel::<String>(1024);
+    let mut recorder = Recorder::create(&cfg.out, cfg.rotate_after, cfg.rotate_bytes)?;
     let mut features = cfg
         .features_out
         .as_deref()
         .map(FeatureWriter::create)
         .transpose()?;
-    let mut recorder = Recorder::create(&cfg.out, cfg.rotate_after, cfg.rotate_bytes)?;
     let mut pipeline = Pipeline::new(cfg.features.clone());
-    pipeline.handle(&recorder.record(connection(
-        "session_start",
-        "market-data record",
-        now_ns(),
-    ))?);
+    // The feature config travels with the recording, so a replay can be checked against it.
+    let detail = format!(
+        "market-data record cvd_windows_ms={:?} obi_levels={:?}",
+        cfg.features.cvd_windows_ms(),
+        cfg.features.obi_levels()
+    );
+    pipeline.handle(&recorder.record(connection("session_start", &detail, now_ns()))?);
 
     let tasks = [
         tokio::spawn(websocket(cfg.clone(), tx.clone())),
         tokio::spawn(snapshots(cfg.rest_base.clone(), snap_rx, tx)),
     ];
-    let result = async {
+    let mut result = async {
         let mut status = interval(Duration::from_secs(10));
         tokio::pin!(shutdown);
         loop {
             tokio::select! {
                 Some(env) = events.recv() => {
-                    // Record first: replay must see exactly what the pipeline saw.
-                    let env = recorder.record(env)?;
-                    let step = pipeline.handle(&env);
-                    if let (Some(out), Some(row)) = (features.as_mut(), &step.feature) {
-                        out.write(row)?;
-                    }
-                    for action in step.actions {
+                    for action in ingest(env, &mut recorder, &mut pipeline, &mut features)? {
                         let Action::RequestSnapshot(symbol) = action;
                         // Requests are deduplicated per symbol, so the queue only fills if the
                         // fetcher died. Stop loudly instead of silently never syncing.
@@ -111,11 +107,35 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
     for task in tasks {
         task.abort();
     }
-    if let Some(out) = features.as_mut() {
-        out.flush()?;
+    // Keep what was already received: drain the channel through the same path.
+    while result.is_ok() {
+        let Ok(env) = events.try_recv() else { break };
+        result = ingest(env, &mut recorder, &mut pipeline, &mut features).map(drop);
     }
+    // Every step runs even after a failure; the first error is the one reported. A failed
+    // run leaves its features as `.partial`, never as a file that looks complete.
+    let features = match (features, &result) {
+        (Some(out), Ok(())) => out.finish(),
+        (Some(mut out), Err(_)) => out.flush(),
+        (None, _) => Ok(()),
+    };
     let finished = recorder.finish();
-    result.and(finished)
+    result.and(features).and(finished)
+}
+
+/// Record first, so replay sees exactly what the pipeline saw; then features, then actions.
+fn ingest(
+    env: Envelope,
+    recorder: &mut Recorder,
+    pipeline: &mut Pipeline,
+    features: &mut Option<FeatureWriter>,
+) -> io::Result<Vec<Action>> {
+    let env = recorder.record(env)?;
+    let step = pipeline.handle(&env);
+    if let (Some(out), Some(row)) = (features.as_mut(), &step.feature) {
+        out.write(row)?;
+    }
+    Ok(step.actions)
 }
 
 /// Ctrl-C everywhere, plus SIGTERM on Unix so supervisors stop the recorder cleanly.

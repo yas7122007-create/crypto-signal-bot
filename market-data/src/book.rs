@@ -8,7 +8,7 @@ use std::collections::{BTreeMap, VecDeque};
 use rust_decimal::Decimal;
 use serde::Serialize;
 
-use crate::binance::{DepthUpdate, Level, Snapshot};
+use crate::binance::{DepthUpdate, Level, Snapshot, SNAPSHOT_LIMIT};
 
 pub const MAX_LEVELS: usize = 5_000;
 pub const MAX_BUFFER: usize = 4_096;
@@ -17,12 +17,23 @@ pub const MAX_BUFFER: usize = 4_096;
 pub struct OrderBook {
     bids: BTreeMap<Decimal, Decimal>,
     asks: BTreeMap<Decimal, Decimal>,
+    /// Deepest snapshot price per side when the snapshot was cut at its level limit.
+    /// Beyond it the book only knows levels that changed since, so it is incomplete there.
+    bid_floor: Option<Decimal>,
+    ask_ceiling: Option<Decimal>,
 }
 
 impl OrderBook {
     pub fn from_snapshot(snapshot: &Snapshot) -> Self {
         let mut book = Self::default();
         book.apply(&snapshot.bids, &snapshot.asks);
+        let full = |side: &[Level]| side.len() >= SNAPSHOT_LIMIT as usize;
+        if full(&snapshot.bids) {
+            book.bid_floor = snapshot.bids.iter().map(|l| l.0).min();
+        }
+        if full(&snapshot.asks) {
+            book.ask_ceiling = snapshot.asks.iter().map(|l| l.0).max();
+        }
         book
     }
 
@@ -53,14 +64,23 @@ impl OrderBook {
         self.asks.first_key_value().map(|(p, q)| (*p, *q))
     }
 
-    /// Bids from the best price down.
+    /// Bids from the best price down, stopping at the deepest price the snapshot covered.
     pub fn top_bids(&self) -> impl Iterator<Item = Level> + '_ {
-        self.bids.iter().rev().map(|(p, q)| (*p, *q))
+        let floor = self.bid_floor;
+        self.bids
+            .iter()
+            .rev()
+            .map(|(p, q)| (*p, *q))
+            .take_while(move |(p, _)| floor.is_none_or(|f| *p >= f))
     }
 
-    /// Asks from the best price up.
+    /// Asks from the best price up, stopping at the deepest price the snapshot covered.
     pub fn top_asks(&self) -> impl Iterator<Item = Level> + '_ {
-        self.asks.iter().map(|(p, q)| (*p, *q))
+        let ceiling = self.ask_ceiling;
+        self.asks
+            .iter()
+            .map(|(p, q)| (*p, *q))
+            .take_while(move |(p, _)| ceiling.is_none_or(|c| *p <= c))
     }
 
     pub fn depth(&self) -> (usize, usize) {
@@ -437,5 +457,38 @@ mod tests {
         assert!(sync.on_update(update(1, 2, 0, &[], &[])).request_snapshot);
         sync.snapshot_failed();
         assert!(sync.on_update(update(3, 4, 2, &[], &[])).request_snapshot);
+    }
+
+    /// A snapshot cut at its level limit says nothing about prices beyond its deepest
+    /// level, so once the top levels are gone the book must not report OBI from there.
+    #[test]
+    fn features_stop_at_the_snapshot_range() {
+        let limit = SNAPSHOT_LIMIT as i64;
+        let side = |start: i64, step: i64| -> Vec<Level> {
+            (0..limit)
+                .map(|i| (Decimal::from(start + step * i), Decimal::ONE))
+                .collect()
+        };
+        let mut book = OrderBook::from_snapshot(&Snapshot {
+            last_update_id: 1,
+            event_ms: None,
+            bids: side(10_000, -1), // 10 000 down to 9 001
+            asks: side(10_001, 1),  // 10 001 up to 11 000
+        });
+        let obi = |b: &OrderBook| crate::features::book_features(b, &[2]).map(|f| f.obi[0].value);
+        assert_eq!(obi(&book), Some(Some(Decimal::ZERO)));
+        // Price falls through the snapshot: all bids above 9 002 vanish, and a level appears
+        // below the snapshot floor where unseen exchange levels may already rest.
+        let gone: Vec<Level> = (9_002..=10_000)
+            .map(|p| (Decimal::from(p), Decimal::ZERO))
+            .collect();
+        let mut bids = gone;
+        bids.push((Decimal::from(8_000), Decimal::from(7)));
+        book.apply(&bids, &[]);
+        assert_eq!(book.top_bids().count(), 1); // Only 9 001 is inside the covered range.
+        assert_eq!(obi(&book), Some(None));
+        // A partial snapshot (fewer levels than the limit) is the whole book: no bound.
+        let small = OrderBook::from_snapshot(&snapshot(1));
+        assert_eq!(small.top_bids().count(), 2);
     }
 }

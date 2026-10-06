@@ -29,13 +29,13 @@ fn feature_config(args: &[String]) -> Result<FeatureConfig, String> {
             })
             .transpose()
     };
-    let windows = list("--cvd-windows-ms")?.unwrap_or(defaults.cvd_windows_ms);
+    let windows = list("--cvd-windows-ms")?.unwrap_or_else(|| defaults.cvd_windows_ms().to_vec());
     let levels = match list("--obi-levels")? {
         Some(v) => v
             .into_iter()
             .map(|n| usize::try_from(n).map_err(|e| format!("--obi-levels: {e}")))
             .collect::<Result<_, _>>()?,
-        None => defaults.obi_levels,
+        None => defaults.obi_levels().to_vec(),
     };
     FeatureConfig::new(windows, levels)
 }
@@ -156,10 +156,7 @@ fn replay_command(args: &[String]) -> ExitCode {
     })
     .and_then(|stats| match write_error.take() {
         Some(e) => Err(e),
-        None => out
-            .as_mut()
-            .map_or(Ok(()), FeatureWriter::flush)
-            .map(|()| stats),
+        None => out.map_or(Ok(()), FeatureWriter::finish).map(|()| stats),
     });
     match result {
         Ok(stats) => {

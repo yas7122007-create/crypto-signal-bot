@@ -30,10 +30,10 @@ pub const DIV_DP: u32 = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeatureConfig {
-    /// Rolling CVD windows, ascending, unique.
-    pub cvd_windows_ms: Vec<i64>,
+    /// Rolling CVD windows, ascending, unique (only `new` and `default` construct this).
+    cvd_windows_ms: Vec<i64>,
     /// OBI depths in price levels per side, ascending, unique.
-    pub obi_levels: Vec<usize>,
+    obi_levels: Vec<usize>,
 }
 
 impl Default for FeatureConfig {
@@ -74,6 +74,14 @@ impl FeatureConfig {
             obi_levels,
         })
     }
+
+    pub fn cvd_windows_ms(&self) -> &[i64] {
+        &self.cvd_windows_ms
+    }
+
+    pub fn obi_levels(&self) -> &[usize] {
+        &self.obi_levels
+    }
 }
 
 /// Order book imbalance over the top `levels` price levels per side:
@@ -100,11 +108,12 @@ pub struct BookFeatures {
     pub obi: Vec<Obi>,
 }
 
-/// `None` when either side is empty. Callers pass only a synced, uncrossed book.
+/// `None` when either side is empty or the top of book has moved outside the range the
+/// snapshot covered. Callers pass only a synced, uncrossed book.
 /// Cost is O(max OBI depth), independent of how many messages arrived.
 pub fn book_features(book: &OrderBook, obi_levels: &[usize]) -> Option<BookFeatures> {
-    let (bid, bid_qty) = book.best_bid()?;
-    let (ask, ask_qty) = book.best_ask()?;
+    let (bid, bid_qty) = book.top_bids().next()?;
+    let (ask, ask_qty) = book.top_asks().next()?;
     let mid = div(bid + ask, Decimal::TWO)?;
     let spread = ask - bid;
     let spread_bps = div(spread * Decimal::from(10_000), mid)?;
@@ -139,8 +148,8 @@ fn obi(book: &OrderBook, levels: &[usize]) -> Vec<Obi> {
         .collect()
 }
 
-/// Total quantity of the first `n` levels for each ascending `n`; `None` if the side is
-/// shallower than `n`.
+/// Total quantity of the first `n` levels for each ascending `n`; `None` if the side has
+/// fewer than `n` levels inside the range the book is known to mirror completely.
 fn cumulative_qty(
     mut side: impl Iterator<Item = crate::binance::Level>,
     levels: &[usize],
@@ -149,7 +158,7 @@ fn cumulative_qty(
     levels
         .iter()
         .map(|&n| {
-            for (_, qty) in side.by_ref().take(n - count) {
+            for (_, qty) in side.by_ref().take(n.saturating_sub(count)) {
                 total += qty;
                 count += 1;
             }
@@ -189,8 +198,10 @@ fn div(numerator: Decimal, denominator: Decimal) -> Option<Decimal> {
     })
 }
 
-/// Signed aggressor quantity over `(t - window_ms, t]`, or `None` while the window reaches
-/// back before the start of contiguous trade coverage.
+/// Signed aggressor quantity of the trades received so far with `T` in
+/// `(t - window_ms, t]`, or `None` while the window reaches back before contiguous trade
+/// coverage. Depth `E` can run slightly ahead of trade delivery, so a trade still in flight
+/// is counted in the next row, not this one; replay reproduces this exactly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct WindowDelta {
     pub window_ms: i64,
@@ -333,23 +344,25 @@ impl TradeFlow {
                 self.heads[i] += 1;
             }
         }
-        // The widest window is last (sorted config), so its head is the minimum.
-        let keep_from = self.heads.last().copied().unwrap_or(end);
+        // The widest window's head is the minimum; `min` needs no sorted-config invariant.
+        let keep_from = self.heads.iter().copied().min().unwrap_or(end);
         while self.base < keep_from {
             self.window.pop_front();
             self.base += 1;
         }
     }
 
-    /// Boundary where trades may have been missed but ids continue (malformed trade).
+    /// Flow of unknown size was lost (malformed trade). `last_id` is kept, so duplicates
+    /// are still rejected and the missing id is counted as a gap.
     pub fn invalidate(&mut self) {
         self.restart_epoch();
-        self.last_id = None;
     }
 
-    /// Session start or disconnect: the next trade starts a fresh epoch without a gap.
+    /// Disconnect: trades missed while offline are a known boundary, so the next trade
+    /// starts a fresh epoch without counting a gap.
     pub fn reset_session(&mut self) {
-        self.invalidate();
+        self.restart_epoch();
+        self.last_id = None;
     }
 
     pub fn clock_ms(&self) -> Option<i64> {
@@ -391,8 +404,8 @@ impl TradeFlow {
         self.sums.iter_mut().for_each(|s| *s = Decimal::ZERO);
     }
 
-    /// Memory cap reached: drop the oldest trade. Windows still holding it lose coverage
-    /// back to just after its timestamp, so they report `None` instead of a partial sum.
+    /// Memory cap reached: drop the oldest trade. Coverage moves up to its timestamp, so a
+    /// window still needing it (windows are `(t - W, t]`) reports `None`, not a partial sum.
     fn evict_front(&mut self) {
         let Some((ts, qty)) = self.window.pop_front() else {
             return;
@@ -404,7 +417,7 @@ impl TradeFlow {
             }
         }
         self.base += 1;
-        self.covered_from_ms = self.covered_from_ms.map(|from| from.max(ts + 1));
+        self.covered_from_ms = self.covered_from_ms.map(|from| from.max(ts));
     }
 }
 

@@ -55,6 +55,7 @@ pub struct PipelineStats {
     pub unparsed: u64,
     pub malformed: u64,
     pub out_of_order_seq: u64,
+    pub feature_rows: u64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -63,7 +64,6 @@ pub struct Pipeline {
     books: BTreeMap<String, DepthSync>,
     trades: BTreeMap<String, TradeFlow>,
     synced_since: BTreeMap<String, u64>,
-    latest: BTreeMap<String, FeatureSnapshot>,
     audit: VecDeque<AuditEntry>,
     last_seq: Option<u64>,
     last_depth_ns: BTreeMap<String, i64>,
@@ -93,14 +93,11 @@ impl Pipeline {
         if is_depth {
             self.last_depth_ns
                 .insert(env.symbol.clone(), env.recv_ts_ns);
-            let flow = self.flow(&env.symbol);
-            if let Some(ts) = env.exchange_ts_ms {
-                flow.advance(ts);
-            }
         }
         match env.kind {
             Kind::Depth => match parse_depth(payload) {
                 Ok(update) => {
+                    self.depth_clock(env);
                     let outcome = self
                         .books
                         .entry(env.symbol.clone())
@@ -121,6 +118,7 @@ impl Pipeline {
             },
             Kind::DepthSnapshot => match parse_snapshot(payload) {
                 Ok(snapshot) => {
+                    self.depth_clock(env);
                     let outcome = self
                         .books
                         .entry(env.symbol.clone())
@@ -162,6 +160,12 @@ impl Pipeline {
                     .ok()
                     .and_then(|v| v.get("event").and_then(Value::as_str).map(str::to_string))
                     .unwrap_or_default();
+                if event == "session_start" {
+                    // A new process: nothing per symbol carries over, so replaying many
+                    // sessions yields the same rows each live run wrote.
+                    self.trades.clear();
+                    self.synced_since.clear();
+                }
                 if event == "disconnected" || event == "session_start" {
                     for (symbol, book) in self.books.iter_mut() {
                         for e in book.reset(&event).events {
@@ -177,14 +181,22 @@ impl Pipeline {
         }
         self.expire_stale_books(env);
         let feature = if is_depth { self.feature(env) } else { None };
-        if let Some(f) = &feature {
-            self.latest.insert(env.symbol.clone(), f.clone());
+        if feature.is_some() {
+            self.stats.feature_rows += 1;
         }
         Step { actions, feature }
     }
 
+    /// Only a depth event that parsed may move the feature clock (it never moves back).
+    fn depth_clock(&mut self, env: &Envelope) {
+        let flow = self.flow(&env.symbol);
+        if let Some(ts) = env.exchange_ts_ms {
+            flow.advance(ts);
+        }
+    }
+
     fn flow(&mut self, symbol: &str) -> &mut TradeFlow {
-        let windows = &self.config.cvd_windows_ms;
+        let windows = self.config.cvd_windows_ms();
         self.trades
             .entry(symbol.to_string())
             .or_insert_with(|| TradeFlow::new(windows))
@@ -193,7 +205,7 @@ impl Pipeline {
     /// Features only from a synced, uncrossed, fresh book; otherwise no row at all.
     fn feature(&self, env: &Envelope) -> Option<FeatureSnapshot> {
         let sync = self.books.get(&env.symbol)?;
-        let book = book_features(sync.book()?, &self.config.obi_levels)?;
+        let book = book_features(sync.book()?, self.config.obi_levels())?;
         let flow = self.trades.get(&env.symbol)?;
         Some(FeatureSnapshot {
             v: FEATURE_SCHEMA_VERSION,
@@ -211,10 +223,6 @@ impl Pipeline {
             last_trade_ms: flow.last_trade_ms,
             trade_gaps: flow.gaps,
         })
-    }
-
-    pub fn config(&self) -> &FeatureConfig {
-        &self.config
     }
 
     /// Uses recorded receive times, so live and replay expire books at the same event.
@@ -268,7 +276,6 @@ impl Pipeline {
             "events": self.stats,
             "books": books,
             "trades": self.trades,
-            "features": self.latest,
         })
     }
 

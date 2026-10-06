@@ -127,18 +127,35 @@ pub struct ReplayStats {
     pub truncated_files: usize,
 }
 
-/// Recording files in replay order.
 /// Feature rows as plain NDJSON, one per line, for evaluation runs and parity checks.
-/// Never overwrites an existing file. Not rotated: enable it for bounded runs only.
+/// Rows go to `<path>.partial`, renamed to `path` only by [`FeatureWriter::finish`], so a
+/// crashed or failed run never leaves a file that looks complete. Never overwrites.
+/// Not rotated: enable it for bounded runs only.
 pub struct FeatureWriter {
     out: BufWriter<File>,
+    partial: PathBuf,
+    path: PathBuf,
 }
 
 impl FeatureWriter {
     pub fn create(path: &Path) -> io::Result<Self> {
-        let file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        if path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} exists", path.display()),
+            ));
+        }
+        let mut partial = path.as_os_str().to_owned();
+        partial.push(".partial");
+        let partial = PathBuf::from(partial);
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&partial)?;
         Ok(Self {
             out: BufWriter::new(file),
+            partial,
+            path: path.to_path_buf(),
         })
     }
 
@@ -150,8 +167,21 @@ impl FeatureWriter {
     pub fn flush(&mut self) -> io::Result<()> {
         self.out.flush()
     }
+
+    pub fn finish(mut self) -> io::Result<()> {
+        self.out.flush()?;
+        self.out.get_ref().sync_all()?;
+        if self.path.exists() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                format!("{} appeared during the run", self.path.display()),
+            ));
+        }
+        fs::rename(&self.partial, &self.path)
+    }
 }
 
+/// Recording files in replay order.
 pub fn recording_files(dir: &Path) -> io::Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)?
         .filter_map(|entry| entry.ok().map(|e| e.path()))

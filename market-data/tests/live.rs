@@ -205,6 +205,14 @@ async fn live_loop_resyncs_records_and_replays_identically() {
         })
         .collect();
     assert!(epochs.len() >= 3, "sync epochs with features: {epochs:?}");
+    // Trades flow too: some rows carry a CVD and a covered window.
+    let rows: Vec<serde_json::Value> = live
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert!(rows.iter().any(|r| r["cvd"].is_string()));
+    assert!(rows.iter().any(|r| r["deltas"][0]["delta"].is_string()));
+    assert!(rows.iter().all(|r| r["obi"][0]["value"].is_string()));
     let book = pipeline.book("BTCUSDT").unwrap();
     assert!(book.is_synced());
     assert!(book.last_update_id().unwrap() >= 1_000);

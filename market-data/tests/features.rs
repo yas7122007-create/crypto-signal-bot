@@ -7,7 +7,7 @@ use market_data::binance::{envelope_from_snapshot, envelope_from_stream};
 use market_data::event::{connection, Envelope};
 use market_data::features::{FeatureConfig, FeatureSnapshot};
 use market_data::pipeline::Pipeline;
-use market_data::recorder::{replay, Recorder};
+use market_data::recorder::{replay, FeatureWriter, Recorder};
 
 const S: &str = "BTCUSDT";
 const GOLDEN: &str = "tests/fixtures/golden_features.ndjson";
@@ -236,6 +236,73 @@ fn malformed_trade_restarts_the_cvd_epoch() {
     let last = run(events).pop().unwrap();
     assert_eq!(last.cvd.map(|d| d.to_string()), Some("1".into()));
     assert_eq!(last.cvd_since_ms, Some(1_700));
+}
+
+/// Replaying a directory that holds several runs yields, for each run, exactly the rows
+/// that run wrote live: nothing per symbol leaks across `session_start`.
+#[test]
+fn multi_session_replay_matches_each_live_run() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut live_rows = Vec::new();
+    // Run 1 has a trade gap; run 2 is the clean tail of the session at earlier times.
+    let second: Vec<Envelope> = std::iter::once(connection("session_start", "run 2", 0))
+        .chain(session()[1..4].iter().cloned())
+        .chain(std::iter::once(trade(1, 900, "1", false)))
+        .chain(std::iter::once(depth(11, 10, 950, &[], &[])))
+        .collect();
+    for (run, events) in [session(), second].into_iter().enumerate() {
+        if run > 0 {
+            std::thread::sleep(Duration::from_millis(5)); // Distinct file timestamps.
+        }
+        let mut recorder =
+            Recorder::create(dir.path(), Duration::from_secs(3600), u64::MAX).unwrap();
+        let mut live = Pipeline::new(config());
+        for env in events {
+            let env = recorder.record(env).unwrap();
+            live_rows.extend(live.handle(&env).feature);
+        }
+        recorder.finish().unwrap();
+    }
+    let mut replayed = Pipeline::new(config());
+    let mut rows = Vec::new();
+    replay(dir.path(), |env| rows.extend(replayed.handle(&env).feature)).unwrap();
+    assert_eq!(ndjson(&rows), ndjson(&live_rows));
+    let last = rows.last().unwrap();
+    assert_eq!((last.trade_gaps, last.feature_ts_ms), (0, Some(1_000)));
+}
+
+/// A malformed diff must not move the feature clock: its header time is untrusted.
+#[test]
+fn malformed_depth_does_not_move_the_clock() {
+    let mut events = session()[..4].to_vec();
+    events.push(
+        envelope_from_stream(
+            r#"{"stream":"btcusdt@depth@100ms","data":{"e":"depthUpdate","E":9999999999,"s":"BTCUSDT","U":11,"u":11,"pu":10,"b":[["x","1"]],"a":[]}}"#,
+            1_100_000_000,
+        )
+        .unwrap(),
+    );
+    events.push(depth(12, 11, 1_200, &[], &[]));
+    events.push(snapshot(12, 1_200, &[("100", "1")], &[("101", "1")]));
+    let rows = run(events);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[1].feature_ts_ms, Some(1_200));
+}
+
+#[test]
+fn feature_file_is_partial_until_finished_and_never_overwritten() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("f.ndjson");
+    let mut out = FeatureWriter::create(&path).unwrap();
+    out.write(&run(session())[0]).unwrap();
+    out.flush().unwrap();
+    assert!(!path.exists());
+    assert!(dir.path().join("f.ndjson.partial").exists());
+    out.finish().unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
+    assert!(!dir.path().join("f.ndjson.partial").exists());
+    let err = FeatureWriter::create(&path).err().unwrap();
+    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
 }
 
 /// The committed file pins the full serialized format, not just the hand-checked values.
