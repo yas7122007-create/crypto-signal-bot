@@ -27,6 +27,8 @@ pub struct Recorder {
     last_flush: Instant,
     rotate_after: Duration,
     rotate_bytes: u64,
+    /// Fixed per session so rotated files sort by sequence even if the clock steps back.
+    session_ms: u128,
 }
 
 impl Recorder {
@@ -42,6 +44,10 @@ impl Recorder {
             last_flush: Instant::now(),
             rotate_after,
             rotate_bytes,
+            session_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0),
         })
     }
 
@@ -95,13 +101,10 @@ impl Recorder {
 
     fn rotate(&mut self) -> io::Result<()> {
         self.close()?;
-        let ms = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or(0);
-        let path = self
-            .dir
-            .join(format!("events-{ms:013}-{:012}.ndjson.gz", self.next_seq));
+        let path = self.dir.join(format!(
+            "events-{:013}-{:012}.ndjson.gz",
+            self.session_ms, self.next_seq
+        ));
         let file = OpenOptions::new().write(true).create_new(true).open(path)?; // Never overwrite.
         self.file = Some(GzEncoder::new(BufWriter::new(file), Compression::fast()));
         self.opened = Instant::now();

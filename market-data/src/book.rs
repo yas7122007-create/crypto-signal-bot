@@ -178,13 +178,15 @@ impl DepthSync {
 
     pub fn on_snapshot(&mut self, snapshot: &Snapshot) -> Outcome {
         let mut out = Outcome::default();
-        self.snapshot_requested = false;
-        if self.synced {
+        // Only a snapshot requested since the last reset may build a book: one fetched
+        // before a disconnect would otherwise be served as synced while offline.
+        if self.synced || !self.snapshot_requested {
             out.events.push(SyncEvent::SnapshotIgnored {
                 last_update_id: snapshot.last_update_id,
             });
             return out;
         }
+        self.snapshot_requested = false;
         self.book = OrderBook::from_snapshot(snapshot);
         self.synced = true;
         self.last_final = None;
@@ -392,8 +394,31 @@ mod tests {
         sync.on_snapshot(&snapshot(5)); // Diffs bridging id 5 were dropped from the buffer: gap, rerequest.
         assert!(!sync.is_synced());
         sync.reset("disconnected");
-        let out = sync.on_snapshot(&snapshot(500));
-        assert!(sync.is_synced() && out.events.len() == 1); // Nothing stale replayed after reset.
+        assert!(
+            sync.on_update(update(9_001, 9_002, 9_000, &[], &[]))
+                .request_snapshot
+        );
+        let out = sync.on_snapshot(&snapshot(9_001));
+        assert!(sync.is_synced() && out.events.len() == 1); // Pre-disconnect diffs were not replayed.
+        assert_eq!(sync.last_update_id(), Some(9_002));
+    }
+
+    #[test]
+    fn snapshot_in_flight_across_disconnect_is_ignored() {
+        let mut sync = DepthSync::default();
+        assert!(sync.on_update(update(10, 12, 9, &[], &[])).request_snapshot);
+        sync.reset("disconnected");
+        let out = sync.on_snapshot(&snapshot(11)); // Fetched before the drop, delivered after.
+        assert_eq!(
+            out.events,
+            vec![SyncEvent::SnapshotIgnored { last_update_id: 11 }]
+        );
+        assert!(!sync.is_synced() && sync.book().is_none());
+        let unrequested = DepthSync::default().on_snapshot(&snapshot(1));
+        assert!(matches!(
+            unrequested.events[0],
+            SyncEvent::SnapshotIgnored { .. }
+        ));
     }
 
     #[test]

@@ -12,6 +12,9 @@ use crate::book::{DepthSync, SyncEvent};
 use crate::event::{Envelope, Kind};
 
 pub const MAX_AUDIT: usize = 1_000;
+/// A synced book with no diff for this long (by recorded receive time) is no longer trusted.
+/// Other streams can keep the socket alive while one symbol's depth stream stalls.
+pub const STALE_DEPTH_NS: i64 = 30_000_000_000;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Action {
@@ -61,6 +64,7 @@ pub struct Pipeline {
     trades: BTreeMap<String, TradeState>,
     audit: VecDeque<AuditEntry>,
     last_seq: Option<u64>,
+    last_depth_ns: BTreeMap<String, i64>,
     pub stats: PipelineStats,
 }
 
@@ -76,6 +80,10 @@ impl Pipeline {
         self.last_seq = Some(env.seq);
         let mut actions = Vec::new();
         let payload = env.payload.get();
+        if matches!(env.kind, Kind::Depth | Kind::DepthSnapshot) {
+            self.last_depth_ns
+                .insert(env.symbol.clone(), env.recv_ts_ns);
+        }
         match env.kind {
             Kind::Depth => match parse_depth(payload) {
                 Ok(update) => {
@@ -165,12 +173,23 @@ impl Pipeline {
                 self.push(env, AuditEvent::Connection { event });
             }
         }
+        self.expire_stale_books(env);
         actions
     }
 
-    pub fn snapshot_failed(&mut self, symbol: &str) {
-        if let Some(book) = self.books.get_mut(symbol) {
-            book.snapshot_failed();
+    /// Uses recorded receive times, so live and replay expire books at the same event.
+    fn expire_stale_books(&mut self, env: &Envelope) {
+        for (symbol, book) in self.books.iter_mut() {
+            let last = self
+                .last_depth_ns
+                .get(symbol)
+                .copied()
+                .unwrap_or(env.recv_ts_ns);
+            if book.is_synced() && env.recv_ts_ns.saturating_sub(last) > STALE_DEPTH_NS {
+                for e in book.reset("stale depth stream").events {
+                    push_bounded(&mut self.audit, env.seq, symbol, AuditEvent::Book(e));
+                }
+            }
         }
     }
 

@@ -24,6 +24,7 @@ const MAX_SNAPSHOT_BYTES: usize = 5 * 1024 * 1024;
 /// Depth limit=1000 costs 20 weight; one per second stays at half of Binance's 2400/min,
 /// leaving room for the Python bot's REST calls from the same IP.
 const SNAPSHOT_SPACING: Duration = Duration::from_secs(1);
+const HEALTHY_AFTER: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -44,7 +45,9 @@ pub fn backoff(attempt: u32) -> Duration {
 
 pub async fn run(cfg: Config) -> io::Result<()> {
     let (tx, mut events) = mpsc::channel::<Envelope>(cfg.channel_capacity);
-    let (snap_tx, snap_rx) = mpsc::channel::<String>(cfg.symbols.len().max(1) * 2);
+    // At most one request per symbol per reset; reconnects are >= 1 s apart, so even a
+    // 10 s fetch timeout cannot queue more than a few hundred.
+    let (snap_tx, snap_rx) = mpsc::channel::<String>(1024);
     let mut recorder = Recorder::create(&cfg.out, cfg.rotate_after, cfg.rotate_bytes)?;
     let mut pipeline = Pipeline::default();
     pipeline.handle(&recorder.record(connection(
@@ -57,7 +60,7 @@ pub async fn run(cfg: Config) -> io::Result<()> {
     tokio::spawn(snapshots(cfg.rest_base.clone(), snap_rx, tx));
 
     let mut status = interval(Duration::from_secs(10));
-    let shutdown = tokio::signal::ctrl_c();
+    let shutdown = shutdown_signal();
     tokio::pin!(shutdown);
     loop {
         tokio::select! {
@@ -66,8 +69,11 @@ pub async fn run(cfg: Config) -> io::Result<()> {
                 let env = recorder.record(env)?;
                 for action in pipeline.handle(&env) {
                     let Action::RequestSnapshot(symbol) = action;
-                    if snap_tx.try_send(symbol.clone()).is_err() {
-                        pipeline.snapshot_failed(&symbol);
+                    // Requests are deduplicated per symbol, so the queue only fills if the
+                    // fetcher died. Stop loudly instead of silently never syncing.
+                    if snap_tx.try_send(symbol).is_err() {
+                        recorder.flush()?;
+                        return Err(io::Error::other("snapshot fetcher stopped"));
                     }
                 }
             }
@@ -81,12 +87,29 @@ pub async fn run(cfg: Config) -> io::Result<()> {
     recorder.finish()
 }
 
+/// Ctrl-C everywhere, plus SIGTERM on Unix so supervisors stop the recorder cleanly.
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut term) = signal(SignalKind::terminate()) {
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => {}
+                _ = term.recv() => {}
+            }
+            return;
+        }
+    }
+    let _ = tokio::signal::ctrl_c().await;
+}
+
 async fn websocket(cfg: Config, tx: mpsc::Sender<Envelope>) {
     let url = stream_url(&cfg.ws_base, &cfg.symbols);
     let mut attempt = 0u32;
     loop {
-        let reason = match tokio_tungstenite::connect_async(url.as_str()).await {
+        let (reason, healthy) = match tokio_tungstenite::connect_async(url.as_str()).await {
             Ok((mut ws, _)) => {
+                let connected_at = Instant::now();
                 if tx
                     .send(connection("connected", "", now_ns()))
                     .await
@@ -108,7 +131,6 @@ async fn websocket(cfg: Config, tx: mpsc::Sender<Envelope>) {
                             break;
                         }
                         Ok(Some(Ok(Message::Text(text)))) => {
-                            attempt = 0; // Healthy data resets the backoff.
                             let recv = now_ns();
                             let env = envelope_from_stream(text.as_str(), recv)
                                 .unwrap_or_else(|_| unparsed(text.as_str(), recv));
@@ -126,9 +148,9 @@ async fn websocket(cfg: Config, tx: mpsc::Sender<Envelope>) {
                         Ok(Some(Ok(_))) => {}
                     }
                 }
-                reason
+                (reason, connected_at.elapsed() >= HEALTHY_AFTER)
             }
-            Err(e) => e.to_string(),
+            Err(e) => (e.to_string(), false),
         };
         let reason: String = reason.chars().take(200).collect();
         eprintln!(
@@ -141,6 +163,11 @@ async fn websocket(cfg: Config, tx: mpsc::Sender<Envelope>) {
             .is_err()
         {
             return;
+        }
+        // Reset only after a connection that stayed up, so an accept-then-drop loop keeps
+        // backing off instead of reconnecting every second toward an IP ban.
+        if healthy {
+            attempt = 0;
         }
         sleep(backoff(attempt)).await;
         attempt = attempt.saturating_add(1);
@@ -211,7 +238,7 @@ async fn fetch(
     base: &str,
     symbol: &str,
 ) -> Result<Envelope, (String, Option<Duration>)> {
-    let response = client
+    let mut response = client
         .get(snapshot_url(base, symbol))
         .send()
         .await
@@ -236,9 +263,12 @@ async fn fetch(
     {
         return Err(("snapshot too large".into(), None));
     }
-    let body = response.bytes().await.map_err(|e| (e.to_string(), None))?;
-    if body.len() > MAX_SNAPSHOT_BYTES {
-        return Err(("snapshot too large".into(), None));
+    let mut body = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|e| (e.to_string(), None))? {
+        if body.len() + chunk.len() > MAX_SNAPSHOT_BYTES {
+            return Err(("snapshot too large".into(), None)); // Chunked bodies have no length header.
+        }
+        body.extend_from_slice(&chunk);
     }
     let text = std::str::from_utf8(&body).map_err(|e| (e.to_string(), None))?;
     envelope_from_snapshot(symbol, text, now_ns()).map_err(|e| (e.to_string(), None))

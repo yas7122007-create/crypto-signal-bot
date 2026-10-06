@@ -169,8 +169,9 @@ cargo run --release -- record --symbols BTCUSDT,ETHUSDT --out ../recordings
 cargo run --release -- replay --input ../recordings --audit
 ```
 
-- Gap urutan, book bersilang, atau diff rusak membatalkan book dan meminta snapshot baru; book yang tidak valid tidak pernah dipakai.
-- Putus koneksi dicatat sebagai event, sehingga replay membatalkan book pada titik yang sama seperti live. Reconnect memakai backoff 1–60 detik; koneksi tanpa pesan selama 30 detik dianggap stale.
+- Gap urutan, book bersilang, diff rusak, atau stream depth yang diam lebih dari 30 detik membatalkan book dan meminta snapshot baru; book yang tidak valid tidak pernah dipakai. Snapshot yang diminta sebelum koneksi putus diabaikan.
+- Maksimal 45 simbol per koneksi (4 stream per simbol, batas Binance 200 stream). SIGINT/SIGTERM menutup rekaman dengan rapi.
+- Putus koneksi dicatat sebagai event, sehingga replay membatalkan book pada titik yang sama seperti live. Reconnect memakai backoff 1–60 detik yang baru direset setelah koneksi bertahan 60 detik; koneksi tanpa pesan selama 30 detik dianggap stale.
 - Snapshot REST (bobot 20) diambil maksimal satu per detik, setengah dari batas 2400/menit, dan mengikuti `Retry-After` saat 429/418.
 - Rekaman: `events-<waktu>-<seq>.ndjson.gz`, rotasi per jam atau 512 MB, flush tiap detik. Setelah crash, replay membaca hingga flush terakhir dan melaporkan file terpotong; baris rusak di tengah file menghentikan replay.
 - Uji: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (offline, tanpa akses Binance).

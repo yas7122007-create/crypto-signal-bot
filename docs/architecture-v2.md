@@ -6,7 +6,7 @@ Paper trading only. No component may create, cancel or modify orders, change lev
 
 ```
 Binance Futures WebSocket
-  -> Rust market data (market-data/)          Phase 1   implemented
+  -> Rust market data (market-data/)          Phase 1   implemented; live Binance run not yet verified
   -> Local L2 order book                      Phase 1/2 sync implemented, order-flow features pending
   -> Order-flow engine (CVD, OBI, microprice) Phase 2   aggressor volume only
   -> Recorder + deterministic replay          Phase 3   implemented (gzip NDJSON)

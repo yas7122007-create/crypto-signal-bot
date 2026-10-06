@@ -11,9 +11,10 @@ pub const WS_URL: &str = "wss://fstream.binance.com/stream";
 pub const REST_URL: &str = "https://fapi.binance.com";
 pub const SNAPSHOT_PATH: &str = "/fapi/v1/depth";
 pub const SNAPSHOT_LIMIT: u32 = 1000;
-/// Binance caps streams per combined connection; 4 streams per symbol keeps us well below it.
-pub const MAX_SYMBOLS: usize = 50;
 const STREAMS: [&str; 4] = ["depth@100ms", "aggTrade", "bookTicker", "markPrice@1s"];
+/// Binance USD-M allows 200 streams per combined connection; keep headroom below it.
+pub const MAX_STREAMS: usize = 200;
+pub const MAX_SYMBOLS: usize = MAX_STREAMS / STREAMS.len() - 5;
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum ParseError {

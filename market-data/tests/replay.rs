@@ -229,3 +229,21 @@ fn consecutive_sessions_replay_in_order() {
     assert_eq!(got.book(), want.book());
     assert_eq!(got.last_update_id(), want.last_update_id());
 }
+
+#[test]
+fn stalled_depth_stream_expires_the_book() {
+    let mut pipeline = Pipeline::default();
+    for env in session().into_iter().take(6) {
+        pipeline.handle(&env);
+    }
+    assert!(pipeline.book("BTCUSDT").unwrap().is_synced());
+    let mut late = trade("BTCUSDT", 99, "1", false); // Socket alive, depth silent for 31 s.
+    late.recv_ts_ns = 106 + 31_000_000_000;
+    late.seq = 100;
+    pipeline.handle(&late);
+    assert!(!pipeline.book("BTCUSDT").unwrap().is_synced());
+    assert!(pipeline.audit().any(|e| e.event
+        == AuditEvent::Book(market_data::book::SyncEvent::Invalidated {
+            reason: "stale depth stream".into()
+        })));
+}
