@@ -1,0 +1,406 @@
+//! Local L2 book and the Binance USD-M snapshot + diff synchronization rules:
+//! buffer diffs, fetch a snapshot, drop diffs with `u < lastUpdateId`, require the first
+//! applied diff to bracket `lastUpdateId` (`U <= id <= u`), then require `pu == previous u`.
+//! Any violation invalidates the book; it never keeps serving data after corruption.
+
+use std::collections::{BTreeMap, VecDeque};
+
+use rust_decimal::Decimal;
+use serde::Serialize;
+
+use crate::binance::{DepthUpdate, Level, Snapshot};
+
+pub const MAX_LEVELS: usize = 5_000;
+pub const MAX_BUFFER: usize = 4_096;
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct OrderBook {
+    bids: BTreeMap<Decimal, Decimal>,
+    asks: BTreeMap<Decimal, Decimal>,
+}
+
+impl OrderBook {
+    fn from_snapshot(snapshot: &Snapshot) -> Self {
+        let mut book = Self::default();
+        book.apply(&snapshot.bids, &snapshot.asks);
+        book
+    }
+
+    fn apply(&mut self, bids: &[Level], asks: &[Level]) {
+        for (side, levels) in [(&mut self.bids, bids), (&mut self.asks, asks)] {
+            for &(price, qty) in levels {
+                if qty.is_zero() {
+                    side.remove(&price);
+                } else {
+                    side.insert(price, qty);
+                }
+            }
+        }
+        // Updates carry absolute quantities, so trimming far levels cannot corrupt near ones.
+        while self.bids.len() > MAX_LEVELS {
+            self.bids.pop_first();
+        }
+        while self.asks.len() > MAX_LEVELS {
+            self.asks.pop_last();
+        }
+    }
+
+    pub fn best_bid(&self) -> Option<Level> {
+        self.bids.last_key_value().map(|(p, q)| (*p, *q))
+    }
+
+    pub fn best_ask(&self) -> Option<Level> {
+        self.asks.first_key_value().map(|(p, q)| (*p, *q))
+    }
+
+    pub fn depth(&self) -> (usize, usize) {
+        (self.bids.len(), self.asks.len())
+    }
+
+    fn crossed(&self) -> bool {
+        matches!((self.best_bid(), self.best_ask()), (Some((b, _)), Some((a, _))) if b >= a)
+    }
+}
+
+/// Audit trail entry for every state change of a book.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "event", rename_all = "snake_case")]
+pub enum SyncEvent {
+    Synced {
+        last_update_id: u64,
+    },
+    Gap {
+        expected_prev: u64,
+        got_prev: u64,
+        got_first: u64,
+        got_final: u64,
+    },
+    Invalidated {
+        reason: String,
+    },
+    SnapshotIgnored {
+        last_update_id: u64,
+    },
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize)]
+pub struct SyncStats {
+    pub applied: u64,
+    pub stale_dropped: u64,
+    pub buffer_dropped: u64,
+    pub gaps: u64,
+    pub invalidations: u64,
+    pub snapshots_applied: u64,
+    pub crossed: u64,
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Outcome {
+    pub events: Vec<SyncEvent>,
+    pub request_snapshot: bool,
+}
+
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct DepthSync {
+    book: OrderBook,
+    synced: bool,
+    /// `u` of the last applied diff; `None` right after a snapshot.
+    last_final: Option<u64>,
+    snapshot_id: u64,
+    buffer: VecDeque<DepthUpdate>,
+    snapshot_requested: bool,
+    pub stats: SyncStats,
+}
+
+impl DepthSync {
+    pub fn is_synced(&self) -> bool {
+        self.synced
+    }
+
+    /// The book, only while it is known to be consistent.
+    pub fn book(&self) -> Option<&OrderBook> {
+        self.synced.then_some(&self.book)
+    }
+
+    pub fn last_update_id(&self) -> Option<u64> {
+        self.synced
+            .then(|| self.last_final.unwrap_or(self.snapshot_id))
+    }
+
+    pub fn on_update(&mut self, update: DepthUpdate) -> Outcome {
+        let mut out = Outcome::default();
+        self.handle(update, &mut out);
+        out
+    }
+
+    fn handle(&mut self, update: DepthUpdate, out: &mut Outcome) {
+        if !self.synced {
+            if self.buffer.len() >= MAX_BUFFER {
+                self.buffer.pop_front();
+                self.stats.buffer_dropped += 1;
+            }
+            self.buffer.push_back(update);
+            self.request(out);
+            return;
+        }
+        let in_sequence = match self.last_final {
+            Some(last) if update.final_update_id <= last => {
+                self.stats.stale_dropped += 1;
+                return;
+            }
+            Some(last) => update.prev_final_update_id == last,
+            None if update.final_update_id < self.snapshot_id => {
+                self.stats.stale_dropped += 1;
+                return;
+            }
+            None => update.first_update_id <= self.snapshot_id,
+        };
+        if !in_sequence {
+            self.stats.gaps += 1;
+            out.events.push(SyncEvent::Gap {
+                expected_prev: self.last_final.unwrap_or(self.snapshot_id),
+                got_prev: update.prev_final_update_id,
+                got_first: update.first_update_id,
+                got_final: update.final_update_id,
+            });
+            self.invalidate("sequence gap", out);
+            self.handle(update, out); // Buffered for the next snapshot.
+            return;
+        }
+        self.book.apply(&update.bids, &update.asks);
+        self.last_final = Some(update.final_update_id);
+        self.stats.applied += 1;
+        if self.book.crossed() {
+            self.stats.crossed += 1;
+            self.invalidate("crossed book", out);
+        }
+    }
+
+    pub fn on_snapshot(&mut self, snapshot: &Snapshot) -> Outcome {
+        let mut out = Outcome::default();
+        self.snapshot_requested = false;
+        if self.synced {
+            out.events.push(SyncEvent::SnapshotIgnored {
+                last_update_id: snapshot.last_update_id,
+            });
+            return out;
+        }
+        self.book = OrderBook::from_snapshot(snapshot);
+        self.synced = true;
+        self.last_final = None;
+        self.snapshot_id = snapshot.last_update_id;
+        self.stats.snapshots_applied += 1;
+        out.events.push(SyncEvent::Synced {
+            last_update_id: snapshot.last_update_id,
+        });
+        if self.book.crossed() {
+            self.stats.crossed += 1;
+            self.invalidate("crossed snapshot", &mut out);
+        }
+        for update in std::mem::take(&mut self.buffer) {
+            self.handle(update, &mut out);
+        }
+        out
+    }
+
+    /// Connection loss: pre-disconnect diffs cannot be bridged, so drop them too.
+    pub fn reset(&mut self, reason: &str) -> Outcome {
+        let mut out = Outcome::default();
+        self.buffer.clear();
+        self.snapshot_requested = false;
+        if self.synced {
+            self.invalidate(reason, &mut out);
+        }
+        // No stream is attached right now; the first diff after reconnecting requests a snapshot.
+        out.request_snapshot = false;
+        self.snapshot_requested = false;
+        out
+    }
+
+    /// A snapshot fetch failed; the next diff will ask again.
+    pub fn snapshot_failed(&mut self) {
+        self.snapshot_requested = false;
+    }
+
+    fn invalidate(&mut self, reason: &str, out: &mut Outcome) {
+        self.synced = false;
+        self.book = OrderBook::default();
+        self.last_final = None;
+        self.stats.invalidations += 1;
+        out.events.push(SyncEvent::Invalidated {
+            reason: reason.to_string(),
+        });
+        self.request(out);
+    }
+
+    fn request(&mut self, out: &mut Outcome) {
+        if !self.snapshot_requested {
+            self.snapshot_requested = true;
+            out.request_snapshot = true;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn d(v: &str) -> Decimal {
+        v.parse().unwrap()
+    }
+
+    fn update(
+        first: u64,
+        last: u64,
+        prev: u64,
+        bids: &[(&str, &str)],
+        asks: &[(&str, &str)],
+    ) -> DepthUpdate {
+        DepthUpdate {
+            first_update_id: first,
+            final_update_id: last,
+            prev_final_update_id: prev,
+            bids: bids.iter().map(|(p, q)| (d(p), d(q))).collect(),
+            asks: asks.iter().map(|(p, q)| (d(p), d(q))).collect(),
+        }
+    }
+
+    fn snapshot(id: u64) -> Snapshot {
+        Snapshot {
+            last_update_id: id,
+            event_ms: None,
+            bids: vec![(d("100"), d("1")), (d("99"), d("2"))],
+            asks: vec![(d("101"), d("1")), (d("102"), d("3"))],
+        }
+    }
+
+    #[test]
+    fn first_diff_requests_snapshot_once_and_is_buffered() {
+        let mut sync = DepthSync::default();
+        assert!(sync.on_update(update(1, 5, 0, &[], &[])).request_snapshot);
+        assert!(!sync.on_update(update(6, 8, 5, &[], &[])).request_snapshot);
+        assert!(sync.book().is_none());
+    }
+
+    #[test]
+    fn snapshot_bridges_buffer_and_drops_stale_diffs() {
+        let mut sync = DepthSync::default();
+        sync.on_update(update(90, 95, 89, &[("100", "9")], &[])); // u < lastUpdateId: dropped
+        sync.on_update(update(96, 103, 95, &[("100", "5")], &[])); // brackets 100
+        sync.on_update(update(104, 110, 103, &[("99", "0")], &[("101", "0")]));
+        let out = sync.on_snapshot(&snapshot(100));
+        assert_eq!(
+            out.events,
+            vec![SyncEvent::Synced {
+                last_update_id: 100
+            }]
+        );
+        assert!(!out.request_snapshot);
+        let book = sync.book().unwrap();
+        assert_eq!(book.best_bid(), Some((d("100"), d("5"))));
+        assert_eq!(book.best_ask(), Some((d("102"), d("3"))));
+        assert_eq!(book.depth(), (1, 1));
+        assert_eq!(sync.last_update_id(), Some(110));
+        assert_eq!(sync.stats.stale_dropped, 1);
+        assert_eq!(sync.stats.applied, 2);
+    }
+
+    #[test]
+    fn snapshot_older_than_buffer_is_rejected_and_rerequested() {
+        let mut sync = DepthSync::default();
+        sync.on_update(update(200, 205, 199, &[], &[]));
+        let out = sync.on_snapshot(&snapshot(100));
+        assert!(out.request_snapshot);
+        assert!(matches!(
+            out.events[1],
+            SyncEvent::Gap { got_first: 200, .. }
+        ));
+        assert!(!sync.is_synced());
+        let out = sync.on_snapshot(&snapshot(202)); // The buffered diff survived the failed attempt.
+        assert!(sync.is_synced() && !out.request_snapshot);
+        assert_eq!(sync.last_update_id(), Some(205));
+    }
+
+    #[test]
+    fn pu_mismatch_invalidates_and_resyncs() {
+        let mut sync = DepthSync::default();
+        sync.on_update(update(99, 101, 98, &[], &[]));
+        sync.on_snapshot(&snapshot(100));
+        let out = sync.on_update(update(105, 107, 104, &[("100", "7")], &[])); // expected pu=101
+        assert!(out.request_snapshot);
+        assert_eq!(
+            out.events[0],
+            SyncEvent::Gap {
+                expected_prev: 101,
+                got_prev: 104,
+                got_first: 105,
+                got_final: 107
+            }
+        );
+        assert!(sync.book().is_none() && sync.last_update_id().is_none());
+        let out = sync.on_snapshot(&snapshot(106));
+        assert!(sync.is_synced() && !out.request_snapshot);
+        assert_eq!(sync.book().unwrap().best_bid(), Some((d("100"), d("7"))));
+        assert_eq!(
+            (
+                sync.stats.gaps,
+                sync.stats.invalidations,
+                sync.stats.snapshots_applied
+            ),
+            (1, 1, 2)
+        );
+    }
+
+    #[test]
+    fn first_diff_after_snapshot_must_bracket_last_update_id() {
+        let mut sync = DepthSync::default();
+        sync.on_update(update(1, 1, 0, &[], &[]));
+        sync.on_snapshot(&snapshot(100)); // Buffer only had stale data; now awaiting a bracketing diff.
+        assert!(sync.is_synced());
+        let out = sync.on_update(update(102, 104, 101, &[], &[])); // Missing 101.
+        assert!(out.request_snapshot && !sync.is_synced());
+    }
+
+    #[test]
+    fn duplicate_diff_is_ignored_and_zero_qty_removes_level() {
+        let mut sync = DepthSync::default();
+        sync.on_update(update(100, 101, 99, &[("99", "0")], &[]));
+        sync.on_snapshot(&snapshot(100));
+        let before = sync.clone();
+        sync.on_update(update(100, 101, 99, &[("100", "50")], &[]));
+        assert_eq!(sync.book(), before.book());
+        assert_eq!(sync.book().unwrap().depth(), (1, 2));
+    }
+
+    #[test]
+    fn crossed_book_is_never_served() {
+        let mut sync = DepthSync::default();
+        sync.on_update(update(100, 101, 99, &[], &[]));
+        sync.on_snapshot(&snapshot(100));
+        let out = sync.on_update(update(102, 102, 101, &[("101.5", "1")], &[]));
+        assert!(out.request_snapshot && sync.book().is_none());
+        assert_eq!(sync.stats.crossed, 1);
+    }
+
+    #[test]
+    fn buffer_is_bounded_and_reset_clears_state() {
+        let mut sync = DepthSync::default();
+        for i in 0..(MAX_BUFFER as u64 + 10) {
+            sync.on_update(update(i * 2 + 1, i * 2 + 2, i * 2, &[], &[]));
+        }
+        assert_eq!(sync.stats.buffer_dropped, 10);
+        sync.on_snapshot(&snapshot(5)); // Diffs bridging id 5 were dropped from the buffer: gap, rerequest.
+        assert!(!sync.is_synced());
+        sync.reset("disconnected");
+        let out = sync.on_snapshot(&snapshot(500));
+        assert!(sync.is_synced() && out.events.len() == 1); // Nothing stale replayed after reset.
+    }
+
+    #[test]
+    fn failed_snapshot_allows_new_request() {
+        let mut sync = DepthSync::default();
+        assert!(sync.on_update(update(1, 2, 0, &[], &[])).request_snapshot);
+        sync.snapshot_failed();
+        assert!(sync.on_update(update(3, 4, 2, &[], &[])).request_snapshot);
+    }
+}

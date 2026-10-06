@@ -2,4 +2,5 @@
 //! recorder and deterministic replay. Public data only; no trading capability.
 
 pub mod binance;
+pub mod book;
 pub mod event;
