@@ -165,10 +165,16 @@ def background(name, args, extra_env=None):
     print(f"{name} dimulai; log: runtime/{name}.log")
 
 
+def legacy_ai():
+    return os.getenv("AI_PROVIDER", "nemotron").strip().lower() in ("ollama", "hermes")
+
+
 def services():
     postgres()
+    # Nemotron is a remote NVIDIA API; a local Ollama model is only needed by the legacy providers.
+    legacy = legacy_ai()
     ollama_url = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-    if not ready(ollama_url + "/api/tags"):
+    if legacy and not ready(ollama_url + "/api/tags"):
         executable = Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Ollama" / "ollama.exe"
         if not executable.exists():
             raise ValueError("Ollama belum terpasang: https://ollama.com/download/windows")
@@ -177,8 +183,8 @@ def services():
     if not ready(api + "/health"):
         background("prefect-server", [sys.executable, "-m", "prefect", "server", "start", "--host", "127.0.0.1"])
     for _ in range(30):
-        if ready(api + "/health") and ready(ollama_url + "/api/tags"):
-            print("Prefect dan Ollama siap.")
+        if ready(api + "/health") and (not legacy or ready(ollama_url + "/api/tags")):
+            print("Prefect dan Ollama siap." if legacy else "Prefect siap.")
             return
         time.sleep(1)
     raise ValueError("Layanan belum siap. Periksa runtime/*.log lalu jalankan doctor.")
@@ -214,9 +220,11 @@ def doctor():
     except Exception as exc:
         print("BELUM SIAP PostgreSQL:", type(exc).__name__)
         failed += 1
-    for label, url in (("Prefect", cfg.get("PREFECT_API_URL", "http://127.0.0.1:4200/api") + "/health"),
-                        ("Binance Futures", cfg.get("BINANCE_URL", "https://fapi.binance.com") + "/fapi/v1/time"),
-                        ("Ollama", cfg.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/tags")):
+    checks = [("Prefect", cfg.get("PREFECT_API_URL", "http://127.0.0.1:4200/api") + "/health"),
+              ("Binance Futures", cfg.get("BINANCE_URL", "https://fapi.binance.com") + "/fapi/v1/time")]
+    if legacy_ai():
+        checks.append(("Ollama", cfg.get("OLLAMA_URL", "http://127.0.0.1:11434") + "/api/tags"))
+    for label, url in checks:
         try:
             response = httpx.get(url, timeout=10)
             response.raise_for_status()
@@ -233,15 +241,25 @@ def doctor():
             print("BELUM SIAP", label + ":", safe_error(exc))
             failed += 1
     configured = bool(cfg.get("TELEGRAM_BOT_TOKEN") and cfg.get("TELEGRAM_CHAT_ID"))
-    provider = cfg.get("AI_PROVIDER", "ollama").lower()
-    print("Pemeriksa AI:", provider)
-    if provider == "hermes":
+    provider = cfg.get("AI_PROVIDER", "nemotron").strip().lower()
+    print("Lapisan AI:", provider)
+    if provider == "nemotron":
+        # Presence only; the key is never printed. Without it signals continue in degraded mode.
+        model = cfg.get("NEMOTRON_MODEL") or "nvidia/nemotron-3-super-120b-a12b"
+        if cfg.get("NVIDIA_API_KEY", "").strip():
+            print("OK Nemotron:", model, "(API key terisi)")
+        else:
+            print("BELUM SIAP Nemotron: isi NVIDIA_API_KEY di .env; sinyal tetap berjalan tanpa penjelasan")
+            failed += 1
+    elif provider == "mock":
+        print("OK Mock reasoning: ringkasan deterministik tanpa jaringan")
+    elif provider == "hermes":
         from services import hermes_executable, hermes_home
         if not Path(hermes_executable()).is_file() or not (hermes_home() / "config.yaml").is_file():
             print("BELUM SIAP Hermes: jalankan setup_local.py hermes")
             failed += 1
     elif provider != "ollama":
-        print("BELUM SIAP AI_PROVIDER: harus ollama atau hermes")
+        print("BELUM SIAP AI_PROVIDER: harus nemotron, mock, ollama, atau hermes")
         failed += 1
     print("Telegram:", "konfigurasi terisi" if configured else "isi token dan chat ID di .env")
     print("Pengiriman Telegram:", cfg.get("TELEGRAM_ENABLED", "false"))

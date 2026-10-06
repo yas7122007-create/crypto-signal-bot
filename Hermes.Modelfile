@@ -1,3 +1,4 @@
+# Legacy (deprecated): alias Qwen untuk AI_PROVIDER=hermes. Target arsitektur: NVIDIA Nemotron.
 FROM qwen3.5:9b
 PARAMETER num_ctx 65536
 PARAMETER temperature 0

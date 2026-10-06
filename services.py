@@ -361,8 +361,24 @@ def signal_text(s):
             f"ID: {s['id']}\nSetup: {s['setup']} | 4h / 1h / 15m\n"
             f"Entry LIMIT: {s['entry']:.10g}\nSL: {s['stop']:.10g}\nTP: {s['target']:.10g}\n"
             f"Berlaku sampai: {utc(s['expires_ms'])}\n"
-            f"Engine: {s['reason']}\nAI: {s['ai']['reason'][:600]}\n"
+            f"Engine: {s['reason']}\n{explanation_text(s)}\n"
             "Evaluasi paper trading; tidak ada order ke exchange.")
+
+
+def explanation_text(s):
+    if "ai" in s:  # Legacy Ollama/Hermes confirmation.
+        return f"AI: {s['ai']['reason'][:600]}"
+    r = s.get("reasoning")
+    if not r:
+        return "Penjelasan: tidak tersedia"
+    if r["status"] == "OK" and r["source"] == "nemotron":
+        text = f"Nemotron: {r['operator_explanation'][:600]}"
+        if r["contradictions"]:
+            text += "\nKontradiksi: " + "; ".join(r["contradictions"])[:300]
+        return text
+    if r["source"] == "deterministic":
+        return f"Ringkasan engine (Nemotron {r['status']}): {r['operator_explanation'][:600]}"
+    return f"Penjelasan Nemotron {r['status']} tidak ditampilkan; sinyal dari engine kuantitatif."
 
 
 def deliver(db, signal):

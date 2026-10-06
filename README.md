@@ -3,7 +3,7 @@
 
 ## Status fitur
 
-Bot melakukan scan terjadwal, konfirmasi AI, paper trading, dan pengiriman sinyal teks ke Telegram jika diaktifkan. Gambar sinyal, perintah `/signal`, dan chat Telegram belum tersedia.
+Bot melakukan scan terjadwal, penjelasan sinyal oleh NVIDIA Nemotron, paper trading, dan pengiriman sinyal teks ke Telegram jika diaktifkan. Gambar sinyal, perintah `/signal`, dan chat Telegram belum tersedia.
 
 Engine membaca candle tertutup 15m, 1h, dan 4h untuk menghasilkan kandidat LONG, SHORT, atau HOLD beserta alasannya. Perhitungan mencakup EMA20/50, ATR, support/resistance, volume relatif, taker delta, sweep, breakout, dan harga entry/SL/TP.
 
@@ -26,9 +26,9 @@ Mengambil data Binance Futures dan menyimpan input agar dapat dianalisis ulang:
 
 `--save-snapshot` membuat file baru dan menolak menimpa file yang sudah ada. Buat folder tujuan terlebih dahulu jika memakai lokasi lain. Pengambilan live memerlukan akses ke Binance; kegagalan HTTP dilaporkan dengan exit code 1 tanpa mengganti data dengan data sintetis.
 
-Hasil JSON berlabel `ANALYSIS_ONLY` dan `market_checks: NOT_RUN`. LONG/SHORT di sini adalah kandidat engine: pemeriksaan spread, funding, jurnal, serta konfirmasi AI dilakukan pada alur bot penuh. Perintah ini tidak membuat sinyal tersimpan, mengirim Telegram, atau memasang order. HOLD adalah hasil analisis normal dengan exit code 0.
+Hasil JSON berlabel `ANALYSIS_ONLY` dan `market_checks: NOT_RUN`. LONG/SHORT di sini adalah kandidat engine: pemeriksaan spread, funding, jurnal, serta penjelasan Nemotron dilakukan pada alur bot penuh. Perintah ini tidak membuat sinyal tersimpan, mengirim Telegram, atau memasang order. HOLD adalah hasil analisis normal dengan exit code 0.
 
-Mode offline hanya memakai standard library Python, tanpa layanan database, Prefect, Ollama, maupun koneksi jaringan. Mode live menggunakan client Binance yang sudah ada dan konfigurasi aturan dari `.env`.
+Mode offline hanya memakai standard library Python, tanpa layanan database, Prefect, model AI, maupun koneksi jaringan. Mode live menggunakan client Binance yang sudah ada dan konfigurasi aturan dari `.env`.
 
 ## Format snapshot
 
@@ -69,15 +69,35 @@ Analisis Python sehari-hari tetap dapat dijalankan dari terminal biasa.
 
 ## Bot terjadwal
 
-Alur yang sudah ada tetap dijalankan melalui `start.ps1`, dengan MariaDB, PostgreSQL untuk Prefect, dan model Ollama yang dikonfigurasi di `.env`. Periksa kesiapan layanan dengan:
+Alur yang sudah ada tetap dijalankan melalui `start.ps1`, dengan MariaDB, PostgreSQL untuk Prefect, dan lapisan AI yang dikonfigurasi di `.env` (default Nemotron via API NVIDIA; Ollama hanya untuk mode legacy). Periksa kesiapan layanan dengan:
 
 ```powershell
 .\.venv\Scripts\python.exe setup_local.py doctor
 ```
 
-Untuk instalasi layanan baru, sediakan MariaDB dan Ollama. Jalankan `setup_local.py prepare` untuk membuat `.env` beserta password lokal dan tabel bot; sesuaikan kredensial MariaDB bila diperlukan. Unduh model Ollama sesuai `OLLAMA_MODEL`, lalu jalankan `setup_local.py install-postgres` dan `setup_local.py services` menggunakan Python virtual environment. Simpan token/password hanya di `.env`. Pengiriman Telegram dikendalikan oleh `TELEGRAM_ENABLED` dan default-nya `false`.
+Untuk instalasi layanan baru, sediakan MariaDB. Jalankan `setup_local.py prepare` untuk membuat `.env` beserta password lokal dan tabel bot; sesuaikan kredensial MariaDB bila diperlukan. Isi `NVIDIA_API_KEY`, lalu jalankan `setup_local.py install-postgres` dan `setup_local.py services` menggunakan Python virtual environment. Simpan token/password hanya di `.env`. Pengiriman Telegram dikendalikan oleh `TELEGRAM_ENABLED` dan default-nya `false`.
 
-## Hermes Agent lokal
+## Lapisan penjelasan NVIDIA Nemotron
+
+`AI_PROVIDER=nemotron` (default) memakai [NVIDIA Nemotron 3 Super 120B-A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) melalui API hosted NVIDIA yang kompatibel dengan OpenAI (`NVIDIA_BASE_URL`, `NEMOTRON_MODEL`). Model 120B ini tidak dijalankan di mesin bot.
+
+Nemotron dipanggil hanya **setelah** kandidat lulus aturan engine, risk gate pasar, dan gate jurnal. Ia menerima bukti terstruktur (fitur 15m/1h/4h, entry/SL/TP, spread, funding, R/R bersih, ringkasan jurnal) dan mengembalikan JSON tervalidasi: `thesis`, `bullish_evidence`, `bearish_evidence`, `contradictions`, `forecast_consistency`, `uncertainty_summary`, `risk_summary`, `operator_explanation`, ditambah metadata audit (`model_name`, `model_version`, `latency_ms`, `generated_at_ms`, `signal_id`, `status`). Field forecast bernilai `NOT_AVAILABLE` sampai PatchTST/Toto tersedia.
+
+Nemotron tidak memutuskan apa pun: ia tidak dapat mengubah arah, harga, atau hasil risk gate, dan kegagalannya tidak menahan sinyal.
+
+| Kondisi | Perilaku |
+| --- | --- |
+| Tersedia | Penjelasan Nemotron disimpan di sinyal dan dikirim ke Telegram |
+| Timeout, error 5xx, respons rusak | `DEGRADED`: ringkasan deterministik engine; sisa siklus scan melewati Nemotron |
+| Rate limit 429 | Retry terbatas mengikuti `Retry-After` dalam batas `NEMOTRON_TIMEOUT_SECONDS` |
+| Kunci kosong | `DISABLED`: tanpa panggilan jaringan; sinyal kuantitatif tetap berjalan |
+| Hasil kedaluwarsa | `STALE`: penjelasan tidak ditampilkan (`NEMOTRON_MAX_AGE_SECONDS`) |
+
+`AI_PROVIDER=mock` menghasilkan ringkasan deterministik tanpa jaringan untuk demo atau pengujian. Kunci API hanya dibaca dari `.env` dan tidak pernah ditulis ke log, hasil, atau pesan error.
+
+## Hermes Agent lokal (legacy, deprecated)
+
+Mode ini dipertahankan sementara untuk rollback. Berbeda dengan Nemotron, model lokal di mode ini bertindak sebagai veto: kandidat hanya menjadi sinyal jika model menjawab `CONFIRM`.
 
 Bot mendukung `AI_PROVIDER=ollama` (langsung) atau `AI_PROVIDER=hermes` (melalui Hermes Agent). Hermes hanya memeriksa kandidat dan mengembalikan JSON `CONFIRM`/`HOLD`; engine tetap menentukan entry, SL, TP, serta batas risiko. Respons gagal, terpotong, tidak valid, atau melewati batas waktu menjadi HOLD.
 
