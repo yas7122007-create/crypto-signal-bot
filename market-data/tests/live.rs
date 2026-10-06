@@ -41,7 +41,7 @@ fn diff(id: u64, prev: u64) -> String {
 fn trade(id: u64) -> String {
     format!(
         r#"{{"stream":"btcusdt@aggTrade","data":{{"e":"aggTrade","E":{t},"s":"BTCUSDT","a":{id},"p":"100.5","q":"0.{id}","f":1,"l":1,"T":{t},"m":{}}}}}"#,
-        id % 3 == 0,
+        id.is_multiple_of(3),
         t = 1_700_000_000_000 + id * 10,
     )
 }
