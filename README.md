@@ -85,6 +85,8 @@ Untuk instalasi layanan baru, sediakan MariaDB. Jalankan `setup_local.py prepare
 
 Nemotron dipanggil hanya **setelah** kandidat lulus aturan engine, risk gate pasar, dan gate jurnal. Ia menerima bukti terstruktur (fitur 15m/1h/4h, entry/SL/TP, spread, funding, R/R bersih, ringkasan jurnal) dan mengembalikan JSON tervalidasi: `thesis`, `bullish_evidence`, `bearish_evidence`, `contradictions`, `forecast_consistency`, `uncertainty_summary`, `risk_summary`, `operator_explanation`, ditambah metadata audit (`model_name`, `model_version`, `latency_ms`, `generated_at_ms`, `signal_id`, `status`). Field forecast bernilai `NOT_AVAILABLE` sampai PatchTST/Toto tersedia.
 
+**Perubahan perilaku:** default `AI_PROVIDER` kini `nemotron`. Instalasi lama yang tidak mengisi `AI_PROVIDER` sebelumnya memakai veto Ollama; kini sinyal yang lulus aturan engine terbit tanpa veto AI dan bot mencatat peringatan. Isi `AI_PROVIDER=ollama` atau `hermes` untuk mempertahankan veto legacy.
+
 Nemotron tidak memutuskan apa pun: ia tidak dapat mengubah arah, harga, atau hasil risk gate, dan kegagalannya tidak menahan sinyal.
 
 | Kondisi | Perilaku |

@@ -62,6 +62,9 @@ def scan(force=False):
                 return {"state": "BUSY"}
             provider = provider_name()
             check_provider(provider)
+            if not os.getenv("AI_PROVIDER"):
+                # Default changed from ollama (veto) to nemotron (explain only); make that visible.
+                LOG.warning("AI_PROVIDER belum diisi; memakai nemotron (tanpa veto AI). Set ollama/hermes untuk veto legacy")
             if provider in LEGACY_PROVIDERS:
                 LOG.warning("AI_PROVIDER=%s sudah deprecated; target arsitektur adalah nemotron", provider)
             now = api.now()
