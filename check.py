@@ -195,7 +195,7 @@ def nemotron_checks(candidate, rules):
     assert reasoning.mark_stale(fresh, {**signal, "candle_ms": 900_000}, now)["status"] == "STALE"
     assert signal["action"] == candidate["action"] and signal["entry"] == candidate["entry"]
     text = signal_text(signal)
-    assert "Nemotron: Setup LONG" in text
+    assert "Nemotron (penjelasan, bukan keputusan): Setup LONG" in text
     signal["reasoning"] = reasoning.mark_stale(fresh, signal, now + 3_600_000)
     text = signal_text(signal)
     assert "Nemotron STALE" in text and "Setup LONG sesuai" not in text
@@ -460,6 +460,10 @@ def main():
                 assert terminate.call_args.args[0] == ["taskkill.exe", "/PID", "12345", "/T", "/F"]
     with patch.dict("os.environ", {"AI_PROVIDER": "invalid"}):
         assert confirm(candidate(), {})["decision"] == "HOLD"
+    reply = {"done": True, "message": {"content": '{"decision":"CONFIRM","reason":"Bukti cukup"}'}}
+    with patch.dict("os.environ", {"AI_PROVIDER": " Ollama "}), patch("services.httpx.post") as post:
+        post.return_value.json.return_value = reply
+        assert confirm(candidate(), {})["decision"] == "CONFIRM"  # Same normalization as the scan loop.
     print("PASS: Hermes final JSON validation, failed/partial responses, missing executable, provider selection")
     with patch.dict("os.environ", {"TELEGRAM_ENABLED": "false"}), patch("services.httpx.post") as send:
         deliver(None, base)
