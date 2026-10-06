@@ -6,3 +6,5 @@ __pycache__/
 runtime/
 reports/
 *.bkp
+market-data/target/
+recordings/
