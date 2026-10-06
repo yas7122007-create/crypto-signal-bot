@@ -51,6 +51,8 @@ Urutan field kline mengikuti [dokumentasi market data Binance](https://developer
 .\.venv\Scripts\python.exe check.py --db
 ```
 
+GitHub Actions (`.github/workflows/ci.yml`) menjalankan `check.py` dan kompilasi semua modul pada Python 3.12 dan 3.13 untuk setiap pull request dan push ke `main`, serta menolak `.env` yang ter-commit dan string berbentuk kredensial. Semua pemanggilan eksternal di-mock.
+
 Pemeriksaan kedua memerlukan MariaDB yang terkonfigurasi dan tabel bot; perubahan uji database di-rollback. Pemeriksaan mencakup arah LONG/SHORT/HOLD, candle tertutup, data tidak valid, biaya/funding simulasi, replay JSON tanpa dependency, penolakan overwrite, dan kegagalan AI. Pengujian ini memakai data sintetis.
 
 ## Pemulihan DNS Binance
