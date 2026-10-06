@@ -93,8 +93,9 @@ impl Pipeline {
         if is_depth {
             self.last_depth_ns
                 .insert(env.symbol.clone(), env.recv_ts_ns);
+            let flow = self.flow(&env.symbol);
             if let Some(ts) = env.exchange_ts_ms {
-                self.flow(&env.symbol).advance(ts);
+                flow.advance(ts);
             }
         }
         match env.kind {
