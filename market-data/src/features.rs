@@ -9,10 +9,11 @@
 
 use std::collections::VecDeque;
 
-use rust_decimal::Decimal;
+use rust_decimal::{Decimal, RoundingStrategy};
 use serde::Serialize;
 
 use crate::binance::AggTrade;
+use crate::book::OrderBook;
 
 pub const FEATURE_SCHEMA_VERSION: u16 = 1;
 /// Trades kept per symbol for rolling windows. Past this the oldest trade is evicted and
@@ -20,26 +21,45 @@ pub const FEATURE_SCHEMA_VERSION: u16 = 1;
 pub const MAX_WINDOW_TRADES: usize = 100_000;
 pub const MAX_WINDOW_MS: i64 = 3_600_000;
 pub const MAX_WINDOWS: usize = 8;
+/// OBI depth stays well inside the 1000-level REST snapshot: beyond it the local book holds
+/// only levels that changed since the snapshot, so it is not a complete picture.
+pub const MAX_OBI_LEVELS: usize = 500;
+/// Division results are rounded half-to-even to this many decimals: stable text, and far
+/// finer than any USD-M tick size.
+pub const DIV_DP: u32 = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FeatureConfig {
     /// Rolling CVD windows, ascending, unique.
     pub cvd_windows_ms: Vec<i64>,
+    /// OBI depths in price levels per side, ascending, unique.
+    pub obi_levels: Vec<usize>,
 }
 
 impl Default for FeatureConfig {
-    /// PRD V2.1 feature table: CVD over 1 s, 5 s, 15 s and 1 m.
+    /// PRD V2.1: CVD over 1 s, 5 s, 15 s and 1 m; OBI over the top 10 and top 50 levels.
     fn default() -> Self {
         Self {
             cvd_windows_ms: vec![1_000, 5_000, 15_000, 60_000],
+            obi_levels: vec![10, 50],
         }
     }
 }
 
 impl FeatureConfig {
-    pub fn new(mut cvd_windows_ms: Vec<i64>) -> Result<Self, String> {
+    pub fn new(mut cvd_windows_ms: Vec<i64>, mut obi_levels: Vec<usize>) -> Result<Self, String> {
         cvd_windows_ms.sort_unstable();
         cvd_windows_ms.dedup();
+        obi_levels.sort_unstable();
+        obi_levels.dedup();
+        if obi_levels.is_empty()
+            || obi_levels.len() > MAX_WINDOWS
+            || obi_levels.iter().any(|n| !(1..=MAX_OBI_LEVELS).contains(n))
+        {
+            return Err(format!(
+                "1 to {MAX_WINDOWS} OBI depths of 1..={MAX_OBI_LEVELS} levels required"
+            ));
+        }
         if cvd_windows_ms.is_empty() || cvd_windows_ms.len() > MAX_WINDOWS {
             return Err(format!("1 to {MAX_WINDOWS} CVD windows required"));
         }
@@ -49,8 +69,100 @@ impl FeatureConfig {
         {
             return Err(format!("CVD windows must be 1..={MAX_WINDOW_MS} ms"));
         }
-        Ok(Self { cvd_windows_ms })
+        Ok(Self {
+            cvd_windows_ms,
+            obi_levels,
+        })
     }
+}
+
+/// Order book imbalance over the top `levels` price levels per side:
+/// `(bid_qty - ask_qty) / (bid_qty + ask_qty)`, in [-1, 1]. `None` unless both sides hold
+/// at least `levels` levels, so a thin or partially rebuilt book never looks balanced.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Obi {
+    pub levels: usize,
+    pub value: Option<Decimal>,
+}
+
+/// Top-of-book prices. `microprice = (bid * ask_qty + ask * bid_qty) / (bid_qty + ask_qty)`:
+/// it leans toward the side with less resting size, where the next trade is likelier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BookFeatures {
+    pub best_bid: Decimal,
+    pub best_bid_qty: Decimal,
+    pub best_ask: Decimal,
+    pub best_ask_qty: Decimal,
+    pub mid: Decimal,
+    pub spread: Decimal,
+    pub spread_bps: Decimal,
+    pub microprice: Decimal,
+    pub obi: Vec<Obi>,
+}
+
+/// `None` when either side is empty. Callers pass only a synced, uncrossed book.
+/// Cost is O(max OBI depth), independent of how many messages arrived.
+pub fn book_features(book: &OrderBook, obi_levels: &[usize]) -> Option<BookFeatures> {
+    let (bid, bid_qty) = book.best_bid()?;
+    let (ask, ask_qty) = book.best_ask()?;
+    let mid = div(bid + ask, Decimal::TWO)?;
+    let spread = ask - bid;
+    let spread_bps = div(spread * Decimal::from(10_000), mid)?;
+    let microprice = div(bid * ask_qty + ask * bid_qty, bid_qty + ask_qty)?;
+    Some(BookFeatures {
+        best_bid: bid.normalize(),
+        best_bid_qty: bid_qty.normalize(),
+        best_ask: ask.normalize(),
+        best_ask_qty: ask_qty.normalize(),
+        mid,
+        spread: spread.normalize(),
+        spread_bps,
+        microprice,
+        obi: obi(book, obi_levels),
+    })
+}
+
+/// One pass per side down to the deepest requested level, summing cumulatively.
+fn obi(book: &OrderBook, levels: &[usize]) -> Vec<Obi> {
+    let bids = cumulative_qty(book.top_bids(), levels);
+    let asks = cumulative_qty(book.top_asks(), levels);
+    levels
+        .iter()
+        .zip(bids.into_iter().zip(asks))
+        .map(|(&levels, sums)| Obi {
+            levels,
+            value: match sums {
+                (Some(b), Some(a)) => div(b - a, b + a),
+                _ => None,
+            },
+        })
+        .collect()
+}
+
+/// Total quantity of the first `n` levels for each ascending `n`; `None` if the side is
+/// shallower than `n`.
+fn cumulative_qty(
+    mut side: impl Iterator<Item = crate::binance::Level>,
+    levels: &[usize],
+) -> Vec<Option<Decimal>> {
+    let (mut total, mut count) = (Decimal::ZERO, 0usize);
+    levels
+        .iter()
+        .map(|&n| {
+            for (_, qty) in side.by_ref().take(n - count) {
+                total += qty;
+                count += 1;
+            }
+            (count == n).then_some(total)
+        })
+        .collect()
+}
+
+fn div(numerator: Decimal, denominator: Decimal) -> Option<Decimal> {
+    numerator.checked_div(denominator).map(|v| {
+        v.round_dp_with_strategy(DIV_DP, RoundingStrategy::MidpointNearestEven)
+            .normalize()
+    })
 }
 
 /// Signed aggressor quantity over `(t - window_ms, t]`, or `None` while the window reaches
@@ -300,12 +412,17 @@ mod tests {
 
     #[test]
     fn config_sorts_dedups_and_rejects_bad_windows() {
-        let cfg = FeatureConfig::new(vec![5_000, 1_000, 5_000]).unwrap();
+        let cfg = FeatureConfig::new(vec![5_000, 1_000, 5_000], vec![50, 10]).unwrap();
         assert_eq!(cfg.cvd_windows_ms, vec![1_000, 5_000]);
-        assert!(FeatureConfig::new(vec![]).is_err());
-        assert!(FeatureConfig::new(vec![0]).is_err());
-        assert!(FeatureConfig::new(vec![MAX_WINDOW_MS + 1]).is_err());
-        assert!(FeatureConfig::new((1..=9).collect()).is_err());
+        assert_eq!(cfg.obi_levels, vec![10, 50]);
+        let obi = vec![10];
+        assert!(FeatureConfig::new(vec![], obi.clone()).is_err());
+        assert!(FeatureConfig::new(vec![0], obi.clone()).is_err());
+        assert!(FeatureConfig::new(vec![MAX_WINDOW_MS + 1], obi.clone()).is_err());
+        assert!(FeatureConfig::new((1..=9).collect(), obi).is_err());
+        assert!(FeatureConfig::new(vec![1_000], vec![]).is_err());
+        assert!(FeatureConfig::new(vec![1_000], vec![0]).is_err());
+        assert!(FeatureConfig::new(vec![1_000], vec![MAX_OBI_LEVELS + 1]).is_err());
     }
 
     #[test]
@@ -403,6 +520,53 @@ mod tests {
         flow.advance(1_000_000 + n as i64 + 5);
         assert_eq!(deltas(&flow), vec![Some("5".into()), None]);
         assert_eq!(flow.epoch_cvd(), Some(Decimal::from(n)));
+    }
+
+    fn book(bids: &[(&str, &str)], asks: &[(&str, &str)]) -> OrderBook {
+        let side = |l: &[(&str, &str)]| l.iter().map(|(p, q)| (d(p), d(q))).collect();
+        OrderBook::from_snapshot(&crate::binance::Snapshot {
+            last_update_id: 1,
+            event_ms: None,
+            bids: side(bids),
+            asks: side(asks),
+        })
+    }
+
+    /// Golden fixture; expected values computed independently (Python `decimal`, 40 digits,
+    /// quantized half-even to 16 dp).
+    #[test]
+    fn golden_book_features() {
+        let book = book(
+            &[("100", "2"), ("99", "3"), ("98", "5")],
+            &[("101", "1"), ("102", "4"), ("103", "10")],
+        );
+        let f = book_features(&book, &[1, 2, 3, 4]).unwrap();
+        let s = |v: Decimal| v.to_string();
+        assert_eq!(s(f.mid), "100.5");
+        assert_eq!(s(f.spread), "1");
+        assert_eq!(s(f.spread_bps), "99.5024875621890547");
+        // (100 * 1 + 101 * 2) / 3: leans toward the thinner ask.
+        assert_eq!(s(f.microprice), "100.6666666666666667");
+        let obi: Vec<_> = f.obi.iter().map(|o| o.value.map(s)).collect();
+        assert_eq!(
+            obi,
+            vec![
+                Some("0.3333333333333333".into()), // (2 - 1) / 3
+                Some("0".into()),                  // (5 - 5) / 10
+                Some("-0.2".into()),               // (10 - 15) / 25
+                None,                              // only 3 levels per side
+            ]
+        );
+    }
+
+    #[test]
+    fn book_features_need_both_sides_and_normalize_text() {
+        assert!(book_features(&book(&[("100", "1")], &[]), &[1]).is_none());
+        let f = book_features(&book(&[("100.10", "1.50")], &[("100.20", "1.50")]), &[1]).unwrap();
+        assert_eq!(f.best_bid.to_string(), "100.1");
+        assert_eq!(f.spread.to_string(), "0.1");
+        assert_eq!(f.microprice.to_string(), "100.15"); // Equal sizes: microprice = mid.
+        assert_eq!(f.obi[0].value, Some(Decimal::ZERO));
     }
 
     /// Running sums must equal a brute-force recomputation at every step.

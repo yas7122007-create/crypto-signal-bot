@@ -20,7 +20,7 @@ pub struct OrderBook {
 }
 
 impl OrderBook {
-    fn from_snapshot(snapshot: &Snapshot) -> Self {
+    pub fn from_snapshot(snapshot: &Snapshot) -> Self {
         let mut book = Self::default();
         book.apply(&snapshot.bids, &snapshot.asks);
         book
@@ -51,6 +51,16 @@ impl OrderBook {
 
     pub fn best_ask(&self) -> Option<Level> {
         self.asks.first_key_value().map(|(p, q)| (*p, *q))
+    }
+
+    /// Bids from the best price down.
+    pub fn top_bids(&self) -> impl Iterator<Item = Level> + '_ {
+        self.bids.iter().rev().map(|(p, q)| (*p, *q))
+    }
+
+    /// Asks from the best price up.
+    pub fn top_asks(&self) -> impl Iterator<Item = Level> + '_ {
+        self.asks.iter().map(|(p, q)| (*p, *q))
     }
 
     pub fn depth(&self) -> (usize, usize) {
