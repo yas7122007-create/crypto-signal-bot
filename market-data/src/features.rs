@@ -470,6 +470,9 @@ mod tests {
         // 1 s window (10 000, 11 000]: -2 + 0.25. 5 s window reaches before coverage.
         assert_eq!(deltas(&flow), vec![Some("-1.75".into()), None]);
         flow.on_trade(&trade(4, 14_000, "3", false)); // +3
+        flow.advance(14_999);
+        // One millisecond short of coverage: (9 999, 14 999] starts before the first trade.
+        assert_eq!(deltas(&flow)[1], None);
         flow.advance(15_000);
         // 1 s (14 000, 15 000]: nothing. 5 s (10 000, 15 000]: trades 2-4 = 1.25.
         assert_eq!(deltas(&flow), vec![Some("0".into()), Some("1.25".into())]);
@@ -544,6 +547,10 @@ mod tests {
         flow.advance(1_000_000 + n as i64 + 5);
         assert_eq!(deltas(&flow), vec![Some("5".into()), None]);
         assert_eq!(flow.epoch_cvd(), Some(Decimal::from(n)));
+        // Covered again from just after the last evicted trade (1 000 010): the sum must
+        // exclude every evicted trade. (1 000 011, 1 100 021] holds trades 12..=n.
+        flow.advance(1_000_011 + n as i64);
+        assert_eq!(deltas(&flow)[1], Some((n - 11).to_string()));
     }
 
     fn book(bids: &[(&str, &str)], asks: &[(&str, &str)]) -> OrderBook {

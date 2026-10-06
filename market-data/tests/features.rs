@@ -219,6 +219,25 @@ fn no_features_from_invalid_book_state() {
     assert_eq!(run(events).len(), 1);
 }
 
+/// A malformed trade means an unknown amount of flow was lost: the CVD epoch restarts.
+#[test]
+fn malformed_trade_restarts_the_cvd_epoch() {
+    let mut events = session()[..6].to_vec(); // Synced, trades 1 and 2.
+    events.push(
+        envelope_from_stream(
+            r#"{"stream":"btcusdt@aggTrade","data":{"e":"aggTrade","s":"BTCUSDT","a":3,"p":"x"}}"#,
+            1_600_000_000,
+        )
+        .unwrap(),
+    );
+    // Even if the next id looks contiguous, the unparsed frame's content is unknown.
+    events.push(trade(3, 1_700, "1", false));
+    events.push(depth(11, 10, 1_800, &[], &[]));
+    let last = run(events).pop().unwrap();
+    assert_eq!(last.cvd.map(|d| d.to_string()), Some("1".into()));
+    assert_eq!(last.cvd_since_ms, Some(1_700));
+}
+
 /// The committed file pins the full serialized format, not just the hand-checked values.
 /// Regenerate with `UPDATE_GOLDEN=1 cargo test` and review the diff.
 #[test]
