@@ -25,6 +25,23 @@ jobs:
         run: python -m compileall -q -x '/\.' .
       # Mocked suite: no database, Prefect server, Binance, Telegram or NVIDIA access needed.
       - run: python check.py
+      - name: v2 unit tests (stdlib + numpy parts; torch-only tests self-skip)
+        run: |
+          python -m pip install numpy
+          python -m unittest discover -s tests -p 'test_*.py' -v
+
+  ml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: python -m pip install -r requirements-ml.txt
+      # Offline, synthetic fixtures only: dataset leakage/mutation tests, baselines, and
+      # PatchTST train/save/load, all on CPU.
+      - run: python -m unittest discover -s tests -p 'test_*.py' -v
 
   secrets:
     runs-on: ubuntu-latest
