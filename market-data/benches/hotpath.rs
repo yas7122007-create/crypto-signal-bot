@@ -529,12 +529,20 @@ fn main() {
 
     // 8. Recorder (serialize + gzip fast + buffered write), feature store, replay.
     let dir = tempfile::tempdir().unwrap();
-    let rec_dir = dir.path().join("rec");
+    // HOTPATH_KEEP=1 keeps the recording and outputs (for replay-equivalence checks).
+    let dir_path = dir.path().to_path_buf();
+    let _keep = std::env::var_os("HOTPATH_KEEP").map(|_| dir.keep());
+    let rec_dir = dir_path.as_path().join("rec");
     {
         // The per-call pass writes to a second recorder, so `rec_dir` holds one clean copy.
         let mut recs = [
             Recorder::create(&rec_dir, Duration::from_secs(3600), 1 << 40).unwrap(),
-            Recorder::create(&dir.path().join("rec2"), Duration::from_secs(3600), 1 << 40).unwrap(),
+            Recorder::create(
+                &dir_path.as_path().join("rec2"),
+                Duration::from_secs(3600),
+                1 << 40,
+            )
+            .unwrap(),
         ];
         let mut calls = 0usize;
         stats.push(measure("recorder write (gzip)", &envs, None, |e| {
@@ -552,7 +560,7 @@ fn main() {
         .sum();
     {
         let mut store = RowStore::create(
-            &dir.path().join("features"),
+            &dir_path.as_path().join("features"),
             "features",
             StoreConfig::default(),
         )
@@ -613,7 +621,7 @@ fn main() {
             black_box(builder.on_row(r));
         }));
     }
-    let state_dir = dir.path().join("state");
+    let state_dir = dir_path.as_path().join("state");
     let mut state = BarState::create(&state_dir, 256).unwrap();
     // Warm to a full 256-bar window by repeating the bars with shifted times.
     let mut window_bars = Vec::new();
@@ -695,6 +703,7 @@ fn main() {
         ALLOC_BYTES.load(Relaxed) / 1_000_000,
         ALLOCS.load(Relaxed)
     );
+    println!("outputs: {}", dir_path.display());
     println!(
         "peak RSS (VmHWM): {}; CPU {:.2} s over {:.2} s wall",
         proc_status("VmHWM:"),
