@@ -239,21 +239,36 @@ def gate_checks(candidate, rules):
     import httpx
     import reasoning
     history = {"sample_count": 25, "average_net_r": 0.1}
-    with patch.dict("os.environ", {"AI_PROVIDER": "mock"}):
-        result = reasoning.confirm_gate(candidate, history)
-        assert result["decision"] == "CONFIRM" and result["risk_flags"] == []
-        thin = reasoning.confirm_gate(candidate, {"sample_count": 0})
-        assert thin["decision"] == "HOLD" and "jurnal_paper_masih_tipis" in thin["risk_flags"]
-    with patch.dict("os.environ", {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": ""}):
-        disabled = reasoning.confirm_gate(candidate, history)
-        assert disabled["decision"] == "HOLD" and disabled["status"] == "DISABLED"
-    with patch.dict("os.environ", {"AI_PROVIDER": "qwen"}):
-        invalid = reasoning.confirm_gate(candidate, history)
-        assert invalid["decision"] == "HOLD" and invalid["status"] == "ERROR"
-    with patch.dict("os.environ", {"AI_PROVIDER": "ollama"}):
-        legacy = reasoning.confirm_gate(candidate, history)
-        assert legacy["decision"] == "HOLD" and legacy["status"] == "DEGRADED"
-    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": "nvapi-TEST", "NEMOTRON_TIMEOUT_SECONDS": "30",
+    # Fix 5 (adversarial-audit corrective pass): V2_MODE is the master kill switch, checked
+    # inside confirm_gate() itself. With it unset/"off" (today's default everywhere), the
+    # gate must return HOLD/DISABLED and must call neither evidence() nor any provider --
+    # not Nemotron's HTTP client, not even the mock provider's local computation.
+    with patch.dict("os.environ", {}, clear=False):
+        import os as _os
+        _os.environ.pop("V2_MODE", None)
+        with patch("reasoning.evidence", side_effect=AssertionError("evidence() called under V2_MODE=off")):
+            off = reasoning.confirm_gate(candidate, history)
+            assert off["decision"] == "HOLD" and off["status"] == "DISABLED" and off["error"] == "V2_MODE=off"
+    print("PASS: confirm_gate() under V2_MODE=off/unset: HOLD/DISABLED, never calls evidence() or a provider")
+    # The rest of this function exercises the provider paths, which are only reachable once
+    # V2_MODE is explicitly "on" -- exactly the gate this fix adds.
+    with patch.dict("os.environ", {"V2_MODE": "on"}):
+        with patch.dict("os.environ", {"AI_PROVIDER": "mock"}):
+            result = reasoning.confirm_gate(candidate, history)
+            assert result["decision"] == "CONFIRM" and result["risk_flags"] == []
+            thin = reasoning.confirm_gate(candidate, {"sample_count": 0})
+            assert thin["decision"] == "HOLD" and "jurnal_paper_masih_tipis" in thin["risk_flags"]
+        with patch.dict("os.environ", {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": ""}):
+            disabled = reasoning.confirm_gate(candidate, history)
+            assert disabled["decision"] == "HOLD" and disabled["status"] == "DISABLED"
+        with patch.dict("os.environ", {"AI_PROVIDER": "qwen"}):
+            invalid = reasoning.confirm_gate(candidate, history)
+            assert invalid["decision"] == "HOLD" and invalid["status"] == "ERROR"
+        with patch.dict("os.environ", {"AI_PROVIDER": "ollama"}):
+            legacy = reasoning.confirm_gate(candidate, history)
+            assert legacy["decision"] == "HOLD" and legacy["status"] == "DEGRADED"
+    env = {"V2_MODE": "on", "AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": "nvapi-TEST",
+           "NEMOTRON_TIMEOUT_SECONDS": "30",
            "NVIDIA_BASE_URL": reasoning.DEFAULT_URL, "NEMOTRON_MODEL": reasoning.DEFAULT_MODEL,
            "NEMOTRON_MAX_RETRIES": "0", "NEMOTRON_THINKING": "false"}
 

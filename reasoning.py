@@ -216,7 +216,20 @@ def confirm_gate(candidate, history, now_ms=None):
     gate); evaluating it here never touches engine.analyze() or the deterministic decision.
     Fails closed on every error path: timeout, invalid JSON, provider failure, disabled,
     missing key, or an unknown provider all become HOLD, never CONFIRM. The only way to get
-    CONFIRM is a parsed, schema-valid CONFIRM from the provider itself."""
+    CONFIRM is a parsed, schema-valid CONFIRM from the provider itself.
+
+    V2_MODE (Fix 5, adversarial-audit corrective pass) is the master kill switch, checked
+    here directly rather than relying on evidence()'s own internal gating of patchtst/toto:
+    "off" (the default) returns HOLD/DISABLED immediately, calling neither evidence() nor
+    any provider -- no Nemotron HTTP request, no API cost, no behavior difference from a
+    world where confirm_gate() did not exist. This matches patchtst_forecast()/
+    toto_evidence(): every V2 entry point checks V2_MODE itself, rather than depending on
+    some other function in the call chain to have already checked it."""
+    if v2_mode() == "off":
+        return dict(symbol=candidate.get("symbol"), model_name=None, model_version=None,
+                    status="DISABLED", error="V2_MODE=off", latency_ms=0.0,
+                    decision="HOLD", confidence=0.0, rationale="V2_MODE=off",
+                    risk_flags=["v2_disabled"])
     provider, start = provider_name(), time.monotonic()
     ev = evidence(candidate, history, now_ms)
     meta = dict(symbol=candidate.get("symbol"), model_name=provider, model_version=None,
