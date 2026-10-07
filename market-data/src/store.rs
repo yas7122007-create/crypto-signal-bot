@@ -196,8 +196,11 @@ impl BarState {
         });
         let path = self.dir.join(format!("{}.json", bar.symbol));
         let tmp = self.dir.join(format!(".{}.json.tmp", bar.symbol));
+        // Rendered in memory, then one write: `to_writer` on an unbuffered `File` issued a
+        // syscall per JSON token (tens of ms per bar on the live loop).
+        let bytes = serde_json::to_vec(&body).map_err(io::Error::other)?;
         let mut file = File::create(&tmp)?;
-        serde_json::to_writer(&mut file, &body).map_err(io::Error::other)?;
+        file.write_all(&bytes)?;
         file.sync_all()?;
         fs::rename(&tmp, &path)
     }
