@@ -3,6 +3,7 @@
 //! Both take [--features-dir DIR] [--features-rotate-mb 256] [--features-max-files 64]
 //! [--cvd-windows-ms 1000,5000,15000,60000] [--obi-levels 10,50]
 //! [--trade-quiet-ms 10000] [--trade-stale-ms 120000].
+//! record also takes [--bars-dir DIR] [--state-dir DIR]; replay takes [--bars-dir DIR].
 //! replay refuses a recording made with a different feature config unless
 //! --allow-config-mismatch is given.
 
@@ -13,13 +14,13 @@ use std::time::Duration;
 
 use market_data::binance::{normalize_symbol, MAX_SYMBOLS, REST_URL, WS_URL};
 use market_data::features::FeatureConfig;
-use market_data::live::{run, Config};
+use market_data::live::{run, Config, Outputs};
 use market_data::pipeline::Pipeline;
 use market_data::recorder::replay;
 use market_data::store::{RowStore, StoreConfig};
 
 fn usage() -> ExitCode {
-    eprintln!("usage:\n  market-data record --symbols BTCUSDT,ETHUSDT --out DIR [--ws-url wss://...] [--rest-url https://...]\n  market-data replay --input DIR [--audit]\n  both: [--features-dir DIR] [--features-rotate-mb 256] [--features-max-files 64] [--cvd-windows-ms 1000,5000,15000,60000] [--obi-levels 10,50] [--trade-quiet-ms 10000] [--trade-stale-ms 120000]\n  replay: [--allow-config-mismatch]");
+    eprintln!("usage:\n  market-data record --symbols BTCUSDT,ETHUSDT --out DIR [--ws-url wss://...] [--rest-url https://...]\n  market-data replay --input DIR [--audit]\n  both: [--features-dir DIR] [--features-rotate-mb 256] [--features-max-files 64] [--cvd-windows-ms 1000,5000,15000,60000] [--obi-levels 10,50] [--trade-quiet-ms 10000] [--trade-stale-ms 120000]\n  record: [--bars-dir DIR] [--state-dir DIR]\n  replay: [--bars-dir DIR] [--allow-config-mismatch]");
     ExitCode::from(2)
 }
 
@@ -145,6 +146,8 @@ fn record(args: &[String]) -> ExitCode {
         features,
         features_dir: option(args, "--features-dir").map(PathBuf::from),
         features_store,
+        bars_dir: option(args, "--bars-dir").map(PathBuf::from),
+        state_dir: option(args, "--state-dir").map(PathBuf::from),
     };
     let runtime = match tokio::runtime::Runtime::new() {
         Ok(rt) => rt,
@@ -175,13 +178,23 @@ fn replay_command(args: &[String]) -> ExitCode {
         }
     };
     let allow_mismatch = args.iter().any(|a| a == "--allow-config-mismatch");
-    let mut out = match option(args, "--features-dir")
-        .map(|dir| RowStore::create(&PathBuf::from(dir), "features", store))
-        .transpose()
-    {
-        Ok(out) => out,
+    let create = |flag: &str, prefix: &'static str, config: StoreConfig| {
+        option(args, flag)
+            .map(|dir| RowStore::create(&PathBuf::from(dir), prefix, config))
+            .transpose()
+            .map_err(|e| format!("{flag}: {e}"))
+    };
+    let outputs = create("--features-dir", "features", store).and_then(|features| {
+        Ok(Outputs {
+            features,
+            bars: create("--bars-dir", "bars", StoreConfig::default())?,
+            state: None,
+        })
+    });
+    let mut outputs = match outputs {
+        Ok(outputs) => outputs,
         Err(e) => {
-            eprintln!("--features-dir: {e}");
+            eprintln!("{e}");
             return ExitCode::FAILURE;
         }
     };
@@ -199,14 +212,17 @@ fn replay_command(args: &[String]) -> ExitCode {
             ));
             return;
         }
-        if let (Some(out), Some(row)) = (out.as_mut(), &step.feature) {
-            failure = out.write(row).err();
-        }
+        failure = outputs.write(&step).err();
     })
     .and_then(|stats| match failure.take() {
         Some(e) => Err(e),
-        None => out.map_or(Ok(()), RowStore::finish).map(|()| stats),
+        None => Ok(stats),
     });
+    // Failed replays leave their outputs `.partial`, never looking complete.
+    let result = match outputs.close(result.is_ok()) {
+        Ok(()) => result,
+        Err(e) => result.and(Err(e)),
+    };
     match result {
         Ok(stats) => {
             let mut report = serde_json::json!({

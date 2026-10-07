@@ -34,7 +34,7 @@ fn diff(id: u64, prev: u64) -> String {
     format!(
         r#"{{"stream":"btcusdt@depth@100ms","data":{{"e":"depthUpdate","E":{e},"T":{e},"s":"BTCUSDT","U":{id},"u":{id},"pu":{prev},"b":[["100","{qty}"]],"a":[["101","{}"]]}}}}"#,
         6 - qty,
-        e = 1_700_000_000_000 + id * 10,
+        e = 1_700_000_000_000 + id * 1_000, // 1 s apart: bars close.
     )
 }
 
@@ -42,7 +42,7 @@ fn trade(id: u64) -> String {
     format!(
         r#"{{"stream":"btcusdt@aggTrade","data":{{"e":"aggTrade","E":{t},"s":"BTCUSDT","a":{id},"p":"100.5","q":"0.{id}","f":1,"l":1,"T":{t},"m":{}}}}}"#,
         id.is_multiple_of(3),
-        t = 1_700_000_000_000 + id * 10,
+        t = 1_700_000_000_000 + id * 1_000,
     )
 }
 
@@ -110,7 +110,7 @@ async fn fake_rest(listener: TcpListener, fake: Arc<Fake>) {
         let id = fake.last_u.load(Ordering::SeqCst);
         let body = format!(
             r#"{{"lastUpdateId":{id},"E":{e},"T":{e},"bids":[["100","1"],["99","1"]],"asks":[["101","1"],["102","1"]]}}"#,
-            e = 1_700_000_000_000 + id * 10
+            e = 1_700_000_000_000 + id * 1_000
         );
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
@@ -152,6 +152,8 @@ async fn live_loop_resyncs_records_and_replays_identically() {
             rotate_bytes: 8_192, // Several feature files too.
             max_files: 1_000,
         },
+        bars_dir: Some(dir.path().join("live-bars")),
+        state_dir: Some(dir.path().join("state")),
     };
     let stop = async move {
         fake.done.notified().await;
@@ -164,13 +166,27 @@ async fn live_loop_resyncs_records_and_replays_identically() {
 
     let mut pipeline = Pipeline::new(config);
     let mut replayed = String::new();
+    let mut replayed_bars = Vec::new();
     let stats = replay(&dir.path().join("rec"), |env| {
-        if let Some(row) = pipeline.handle(&env).feature {
+        let step = pipeline.handle(&env);
+        if let Some(row) = step.feature {
             replayed.push_str(&serde_json::to_string(&row).unwrap());
             replayed.push('\n');
         }
+        replayed_bars.extend(step.bar.map(|b| serde_json::to_string(&b).unwrap()));
     })
     .unwrap();
+    let live_bars = market_data::store::read_rows(&dir.path().join("live-bars"), "bars").unwrap();
+    assert!(!live_bars.is_empty(), "bars expected");
+    assert_eq!(replayed_bars, live_bars);
+    // The state file holds the latest bars for the Python bridge, as valid JSON.
+    let state: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(dir.path().join("state").join("BTCUSDT.json")).unwrap(),
+    )
+    .unwrap();
+    let window = state["bars"].as_array().unwrap();
+    let last: serde_json::Value = serde_json::from_str(live_bars.last().unwrap()).unwrap();
+    assert_eq!(window.last().unwrap(), &last);
     let feature_files = market_data::store::row_files(&features_dir, "features").unwrap();
     assert!(feature_files.len() > 1, "feature rotation expected");
     let live = market_data::store::read_rows(&features_dir, "features")

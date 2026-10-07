@@ -21,7 +21,7 @@ use crate::event::{connection, now_ns, session_start, Envelope};
 use crate::features::FeatureConfig;
 use crate::pipeline::{Action, Pipeline};
 use crate::recorder::Recorder;
-use crate::store::{RowStore, StoreConfig};
+use crate::store::{BarState, RowStore, StoreConfig};
 
 const MAX_SNAPSHOT_BYTES: usize = 5 * 1024 * 1024;
 /// Depth limit=1000 costs 20 weight; one per second stays at half of Binance's 2400/min,
@@ -43,6 +43,10 @@ pub struct Config {
     /// Optional directory of feature rows; replay of the recording reproduces them exactly.
     pub features_dir: Option<PathBuf>,
     pub features_store: StoreConfig,
+    /// Optional directory of one-minute bars (rotated gzip), the forecasting dataset input.
+    pub bars_dir: Option<PathBuf>,
+    /// Optional directory of `<SYMBOL>.json` files with the latest bars, for the Python bridge.
+    pub state_dir: Option<PathBuf>,
 }
 
 /// Reconnect delay: 1 s, 2 s, 4 s ... capped at 60 s.
@@ -61,11 +65,23 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
     // 10 s fetch timeout cannot queue more than a few hundred.
     let (snap_tx, snap_rx) = mpsc::channel::<String>(1024);
     let mut recorder = Recorder::create(&cfg.out, cfg.rotate_after, cfg.rotate_bytes)?;
-    let mut features = cfg
-        .features_dir
-        .as_deref()
-        .map(|dir| RowStore::create(dir, "features", cfg.features_store.clone()))
-        .transpose()?;
+    let mut outputs = Outputs {
+        features: cfg
+            .features_dir
+            .as_deref()
+            .map(|dir| RowStore::create(dir, "features", cfg.features_store.clone()))
+            .transpose()?,
+        bars: cfg
+            .bars_dir
+            .as_deref()
+            .map(|dir| RowStore::create(dir, "bars", StoreConfig::default()))
+            .transpose()?,
+        state: cfg
+            .state_dir
+            .as_deref()
+            .map(|dir| BarState::create(dir, STATE_BARS))
+            .transpose()?,
+    };
     let mut pipeline = Pipeline::new(cfg.features.clone());
     // The feature config travels with the recording, so replay can verify it.
     pipeline.handle(&recorder.record(session_start(
@@ -84,7 +100,7 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
         loop {
             tokio::select! {
                 Some(env) = events.recv() => {
-                    for action in ingest(env, &mut recorder, &mut pipeline, &mut features)? {
+                    for action in ingest(env, &mut recorder, &mut pipeline, &mut outputs)? {
                         let Action::RequestSnapshot(symbol) = action;
                         // Requests are deduplicated per symbol, so the queue only fills if the
                         // fetcher died. Stop loudly instead of silently never syncing.
@@ -95,10 +111,8 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
                 }
                 _ = status.tick() => {
                     recorder.flush()?;
-                    if let Some(out) = features.as_mut() {
-                        out.flush()?;
-                    }
-                    let dropped = features.as_ref().map_or(0, |f| f.dropped_rows);
+                    outputs.flush()?;
+                    let dropped = outputs.features.as_ref().map_or(0, |f| f.dropped_rows);
                     eprintln!("{}", serde_json::json!({"status": pipeline.summary(), "feature_rows_dropped": dropped}));
                 }
                 _ = &mut shutdown => return Ok(()),
@@ -112,31 +126,73 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
     // Keep what was already received: drain the channel through the same path.
     while result.is_ok() {
         let Ok(env) = events.try_recv() else { break };
-        result = ingest(env, &mut recorder, &mut pipeline, &mut features).map(drop);
+        result = ingest(env, &mut recorder, &mut pipeline, &mut outputs).map(drop);
     }
     // Every step runs even after a failure; the first error is the one reported. A failed
     // run leaves its features as `.partial`, never as a file that looks complete.
-    let features = match (features, &result) {
-        (Some(out), Ok(())) => out.finish(),
-        (Some(mut out), Err(_)) => out.flush(),
-        (None, _) => Ok(()),
-    };
+    let outputs = outputs.close(result.is_ok());
     let finished = recorder.finish();
-    result.and(features).and(finished)
+    result.and(outputs).and(finished)
 }
 
-/// Record first, so replay sees exactly what the pipeline saw; then features, then actions.
+/// Bars kept per symbol in the state files (bounded; > the forecasting window).
+pub const STATE_BARS: usize = 256;
+
+/// Derived outputs of the live loop; each is optional.
+pub struct Outputs {
+    pub features: Option<RowStore>,
+    pub bars: Option<RowStore>,
+    pub state: Option<BarState>,
+}
+
+impl Outputs {
+    pub fn write(&mut self, step: &crate::pipeline::Step) -> io::Result<()> {
+        if let (Some(out), Some(row)) = (self.features.as_mut(), &step.feature) {
+            out.write(row)?;
+        }
+        if let Some(bar) = &step.bar {
+            if let Some(out) = self.bars.as_mut() {
+                out.write(bar)?;
+                out.flush()?; // One bar a minute per symbol: keep the file readable.
+            }
+            if let Some(state) = self.state.as_mut() {
+                state.update(bar)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn flush(&mut self) -> io::Result<()> {
+        for store in [self.features.as_mut(), self.bars.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            store.flush()?;
+        }
+        Ok(())
+    }
+
+    /// Clean runs finalize their files; failed runs leave them `.partial`.
+    pub fn close(self, clean: bool) -> io::Result<()> {
+        let mut first = Ok(());
+        for mut store in [self.features, self.bars].into_iter().flatten() {
+            let done = if clean { store.finish() } else { store.flush() };
+            first = first.and(done);
+        }
+        first
+    }
+}
+
+/// Record first, so replay sees exactly what the pipeline saw; then outputs, then actions.
 fn ingest(
     env: Envelope,
     recorder: &mut Recorder,
     pipeline: &mut Pipeline,
-    features: &mut Option<RowStore>,
+    outputs: &mut Outputs,
 ) -> io::Result<Vec<Action>> {
     let env = recorder.record(env)?;
     let step = pipeline.handle(&env);
-    if let (Some(out), Some(row)) = (features.as_mut(), &step.feature) {
-        out.write(row)?;
-    }
+    outputs.write(&step)?;
     Ok(step.actions)
 }
 

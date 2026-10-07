@@ -7,6 +7,7 @@ use rust_decimal::Decimal;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::bars::{Bar, BarBuilder};
 use crate::binance::{parse_agg_trade, parse_depth, parse_snapshot};
 use crate::book::{DepthSync, SyncEvent};
 use crate::event::{Envelope, Kind};
@@ -30,6 +31,8 @@ pub enum Action {
 pub struct Step {
     pub actions: Vec<Action>,
     pub feature: Option<FeatureSnapshot>,
+    /// A one-minute bar the feature row closed.
+    pub bar: Option<Bar>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -69,6 +72,7 @@ pub struct PipelineStats {
     pub malformed: u64,
     pub out_of_order_seq: u64,
     pub feature_rows: u64,
+    pub bars: u64,
     /// Sessions whose recorded feature config differs from this pipeline's.
     pub config_mismatch: u64,
     /// Sessions recorded without a feature config (older recordings): not checkable.
@@ -82,6 +86,7 @@ pub struct Pipeline {
     trades: BTreeMap<String, TradeFlow>,
     synced_since: BTreeMap<String, u64>,
     session_id: Option<i64>,
+    bars: BarBuilder,
     audit: VecDeque<AuditEntry>,
     last_seq: Option<u64>,
     last_depth_ns: BTreeMap<String, i64>,
@@ -183,6 +188,7 @@ impl Pipeline {
                     // sessions yields the same rows each live run wrote.
                     self.trades.clear();
                     self.synced_since.clear();
+                    self.bars.reset();
                     self.session_id = Some(env.recv_ts_ns);
                     self.check_config(env, payload);
                 }
@@ -201,10 +207,18 @@ impl Pipeline {
         }
         self.expire_stale_books(env);
         let feature = if is_depth { self.feature(env) } else { None };
+        let bar = feature.as_ref().and_then(|row| self.bars.on_row(row));
         if feature.is_some() {
             self.stats.feature_rows += 1;
         }
-        Step { actions, feature }
+        if bar.is_some() {
+            self.stats.bars += 1;
+        }
+        Step {
+            actions,
+            feature,
+            bar,
+        }
     }
 
     fn check_config(&mut self, env: &Envelope, payload: &str) {

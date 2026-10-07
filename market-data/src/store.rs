@@ -143,6 +143,63 @@ impl RowStore {
     }
 }
 
+/// Latest bars per symbol as one small JSON file each (`<dir>/<SYMBOL>.json`), replaced
+/// atomically (write to a temporary file, then rename), so a reader never sees a torn
+/// file. This is the live contract the Python bridge reads.
+pub struct BarState {
+    dir: PathBuf,
+    keep: usize,
+    bars: std::collections::BTreeMap<String, std::collections::VecDeque<crate::bars::Bar>>,
+}
+
+pub const STATE_SCHEMA_VERSION: u16 = 1;
+
+impl BarState {
+    pub fn create(dir: &Path, keep: usize) -> io::Result<Self> {
+        fs::create_dir_all(dir)?;
+        Ok(Self {
+            dir: dir.to_path_buf(),
+            keep: keep.max(1),
+            bars: Default::default(),
+        })
+    }
+
+    pub fn update(&mut self, bar: &crate::bars::Bar) -> io::Result<()> {
+        // Symbols come from exchange data: only plain names may become file names.
+        let valid = (1..=30).contains(&bar.symbol.len())
+            && bar
+                .symbol
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit());
+        if !valid {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, "bad symbol"));
+        }
+        let window = self.bars.entry(bar.symbol.clone()).or_default();
+        if window
+            .back()
+            .is_some_and(|last| last.session_id != bar.session_id)
+        {
+            window.clear(); // Never mix sessions in one window.
+        }
+        if window.len() >= self.keep {
+            window.pop_front();
+        }
+        window.push_back(bar.clone());
+        let body = serde_json::json!({
+            "v": STATE_SCHEMA_VERSION,
+            "kind": "bar_window",
+            "symbol": bar.symbol,
+            "bars": window,
+        });
+        let path = self.dir.join(format!("{}.json", bar.symbol));
+        let tmp = self.dir.join(format!(".{}.json.tmp", bar.symbol));
+        let mut file = File::create(&tmp)?;
+        serde_json::to_writer(&mut file, &body).map_err(io::Error::other)?;
+        file.sync_all()?;
+        fs::rename(&tmp, &path)
+    }
+}
+
 /// Completed files of one prefix in write order (`.partial` files are excluded).
 pub fn row_files(dir: &Path, prefix: &str) -> io::Result<Vec<PathBuf>> {
     let mut files: Vec<PathBuf> = fs::read_dir(dir)?
