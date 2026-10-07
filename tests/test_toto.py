@@ -1,9 +1,11 @@
 """Toto validator: contract bounds, the subprocess worker runner, and fail-closed
 validate() (timeout, invalid output, a raising adapter, no model, no forecast)."""
 import json
+import os
 import sys
 import tempfile
 import textwrap
+import time
 import unittest
 from pathlib import Path
 
@@ -69,6 +71,41 @@ class WorkerRunner(unittest.TestCase):
             W.run(["/no/such/binary"], {}, timeout_s=10)
         with self.assertRaises(W.WorkerError):
             W.run("not a list", {}, timeout_s=10)
+
+
+class WorkerTimeoutKillsTheWholeTree(unittest.TestCase):
+    """Review finding: a timeout must not orphan processes a wrapper-style worker command
+    started (e.g. a shell script running the real model), or a model keeps running after
+    ResourceGate has released its mutex."""
+
+    @unittest.skipUnless(os.name == "posix", "process groups are POSIX-only")
+    def test_grandchild_is_killed_on_timeout(self):
+        with tempfile.TemporaryDirectory() as d:
+            pidfile = Path(d) / "grandchild.pid"
+            wrapper = Path(d) / "wrapper.sh"
+            wrapper.write_text(f"#!/bin/sh\n{sys.executable} -c 'import os, time; "
+                               f"open(\"{pidfile}\", \"w\").write(str(os.getpid())); time.sleep(30)'\n")
+            wrapper.chmod(0o755)
+            with self.assertRaises(W.WorkerError):
+                W.run([str(wrapper)], {}, timeout_s=1)
+            pid = int(pidfile.read_text())
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and _alive(pid):
+                time.sleep(0.05)
+            self.assertFalse(_alive(pid), "grandchild model process survived the timeout")
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    # A killed-but-unreaped process is a zombie: dead for our purposes.
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().split(")")[-1].split()[0] != "Z"
+    except OSError:
+        return True
 
 
 class ValidateFailClosed(unittest.TestCase):

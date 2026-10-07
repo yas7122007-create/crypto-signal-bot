@@ -5,6 +5,8 @@ stdout; this process never passes it unparsed data and never retries on failure 
 or bad output is the caller's signal to fail closed.
 """
 import json
+import os
+import signal
 import subprocess
 
 
@@ -18,19 +20,42 @@ def run(argv, payload, timeout_s):
     for the error message (observability, not a value)."""
     if not isinstance(argv, list) or not argv or any(not isinstance(a, str) for a in argv):
         raise WorkerError("argv must be a non-empty list of strings")
+    # The worker gets its own process group on POSIX so a timeout kills everything it started
+    # (e.g. a wrapper script's model process), not just the direct child: an orphaned model
+    # would keep running after ResourceGate released its mutex.
+    posix = os.name == "posix"
     try:
-        result = subprocess.run(argv, input=json.dumps(payload, default=str), capture_output=True,
-                                text=True, timeout=timeout_s, shell=False)
-    except subprocess.TimeoutExpired:
-        raise WorkerError("worker timed out") from None
+        proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True, shell=False,
+                                start_new_session=posix)
     except OSError as exc:
         raise WorkerError(f"worker could not start: {exc}") from None
-    if result.returncode != 0:
-        raise WorkerError(f"worker exited {result.returncode}: {result.stderr[-500:]}")
     try:
-        out = json.loads(result.stdout)
+        stdout, stderr = proc.communicate(json.dumps(payload, default=str), timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        _kill(proc, posix)
+        raise WorkerError("worker timed out") from None
+    except BaseException:
+        _kill(proc, posix)
+        raise
+    if proc.returncode != 0:
+        raise WorkerError(f"worker exited {proc.returncode}: {stderr[-500:]}")
+    try:
+        out = json.loads(stdout)
     except json.JSONDecodeError:
         raise WorkerError("worker did not return valid JSON") from None
     if not isinstance(out, dict):
         raise WorkerError("worker output must be a JSON object")
     return out
+
+
+def _kill(proc, posix):
+    """Kill the worker and, on POSIX, its whole process group; then reap it."""
+    try:
+        if posix:
+            os.killpg(proc.pid, signal.SIGKILL)
+        else:
+            proc.kill()
+    except (ProcessLookupError, PermissionError):
+        pass
+    proc.communicate()

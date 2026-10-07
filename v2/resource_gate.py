@@ -16,18 +16,19 @@ on everything else:
                     opinion, is skipped; PatchTST still runs.
     SEVERE          load above twice the limit or free RAM below half of it: PatchTST is
                     skipped too.
-    INVALID_CONFIG  a threshold that is not a finite number above zero (bogus, NaN, inf, 0,
-                    negative, blank). Never replaced by a permissive default.
+    INVALID_CONFIG  a threshold that is not a plain ASCII decimal above zero (bogus, NaN, inf,
+                    0, negative, blank, "1_5", exponents). Never replaced by a default.
     TELEMETRY_ERROR on Linux, any failure to obtain or parse a measurement, or a non-finite or
                     negative reading.
-    UNSUPPORTED     not Linux. The deployment target is Linux, where both sources exist; on any
-                    other platform the gate does not try to measure and never runs a job. This
-                    is reported separately from TELEMETRY_ERROR so the two are not confused.
+    UNSUPPORTED     not Linux: the gate only knows how to measure on Linux, so on any other
+                    platform (including the Windows laptop setup in README.md) it never runs a
+                    job. Reported separately from TELEMETRY_ERROR so the two are not confused.
 - A bug in the gate itself (GATE_ERROR) also skips the job. An exception raised by the job
   itself propagates unchanged; both callers already turn it into "NOT_AVAILABLE".
 """
 import math
 import os
+import re
 import sys
 import threading
 from types import MappingProxyType
@@ -39,6 +40,9 @@ SEVERE_FACTOR = 2.0
 DEFAULTS = MappingProxyType({"V2_RESOURCE_MAX_LOAD_PER_CORE": "1.5",
                              "V2_RESOURCE_MIN_FREE_MB": "512"})
 JOBS = ("patchtst", "toto")
+# A plain ASCII decimal: rejects what float() would also accept ("1_5", full-width digits,
+# exponents, hex, surrounding blanks), so a typo cannot silently loosen a threshold.
+_DECIMAL = re.compile(r"[0-9]+(?:\.[0-9]+)?|\.[0-9]+")
 
 OK = "ok"
 PRESSURE = "resource_pressure"
@@ -55,8 +59,11 @@ _ALLOWED = MappingProxyType({"toto": (OK,), "patchtst": (OK, PRESSURE)})
 
 
 def _threshold(name):
-    value = float(os.environ.get(name, DEFAULTS[name]))
-    if not math.isfinite(value) or value <= 0:
+    raw = os.environ.get(name, DEFAULTS[name])
+    if not _DECIMAL.fullmatch(raw):
+        raise ValueError(f"{name} must be a plain decimal number")
+    value = float(raw)
+    if not math.isfinite(value * SEVERE_FACTOR) or value <= 0:
         raise ValueError(f"{name} must be a finite number above zero")
     return value
 

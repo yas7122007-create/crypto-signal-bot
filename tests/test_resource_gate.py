@@ -58,7 +58,9 @@ class InvalidConfigFailsClosed(unittest.TestCase):
 
     def test_nan_infinity_zero_negative_and_blank_thresholds(self):
         for name in ("V2_RESOURCE_MAX_LOAD_PER_CORE", "V2_RESOURCE_MIN_FREE_MB"):
-            for bad in ("nan", "NaN", "inf", "-inf", "Infinity", "0", "-1", "", "  ", "1e400"):
+            for bad in ("nan", "NaN", "inf", "-inf", "Infinity", "0", "-1", "", "  ", "1e400",
+                        "1_5", "\uff11.\uff15", "1e308", "1.5e0", "0x1", " 1.5", "1.5 ", "1.",
+                        "9" * 400):
                 with self.subTest(name=name, value=bad):
                     self.assert_blocked(**{name: bad})
 
