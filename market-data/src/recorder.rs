@@ -13,7 +13,6 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 
 use crate::event::Envelope;
-use crate::features::FeatureSnapshot;
 
 const FLUSH_EVERY_EVENTS: u32 = 1_000;
 const FLUSH_EVERY: Duration = Duration::from_secs(1);
@@ -125,60 +124,6 @@ pub struct ReplayStats {
     pub files: usize,
     pub events: u64,
     pub truncated_files: usize,
-}
-
-/// Feature rows as plain NDJSON, one per line, for evaluation runs and parity checks.
-/// Rows go to `<path>.partial`, renamed to `path` only by [`FeatureWriter::finish`], so a
-/// crashed or failed run never leaves a file that looks complete. Never overwrites.
-/// Not rotated: enable it for bounded runs only.
-pub struct FeatureWriter {
-    out: BufWriter<File>,
-    partial: PathBuf,
-    path: PathBuf,
-}
-
-impl FeatureWriter {
-    pub fn create(path: &Path) -> io::Result<Self> {
-        if path.exists() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("{} exists", path.display()),
-            ));
-        }
-        let mut partial = path.as_os_str().to_owned();
-        partial.push(".partial");
-        let partial = PathBuf::from(partial);
-        let file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&partial)?;
-        Ok(Self {
-            out: BufWriter::new(file),
-            partial,
-            path: path.to_path_buf(),
-        })
-    }
-
-    pub fn write(&mut self, row: &FeatureSnapshot) -> io::Result<()> {
-        serde_json::to_writer(&mut self.out, row).map_err(io::Error::other)?;
-        self.out.write_all(b"\n")
-    }
-
-    pub fn flush(&mut self) -> io::Result<()> {
-        self.out.flush()
-    }
-
-    pub fn finish(mut self) -> io::Result<()> {
-        self.out.flush()?;
-        self.out.get_ref().sync_all()?;
-        if self.path.exists() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("{} appeared during the run", self.path.display()),
-            ));
-        }
-        fs::rename(&self.partial, &self.path)
-    }
 }
 
 /// Recording files in replay order.

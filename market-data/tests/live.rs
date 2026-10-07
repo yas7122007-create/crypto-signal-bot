@@ -135,7 +135,7 @@ async fn live_loop_resyncs_records_and_replays_identically() {
     tokio::spawn(fake_rest(rest, fake.clone()));
 
     let dir = tempfile::tempdir().unwrap();
-    let features_out = dir.path().join("live-features.ndjson");
+    let features_dir = dir.path().join("live-features");
     let config = FeatureConfig::new(vec![100, 1_000], vec![1, 2]).unwrap();
     let cfg = Config {
         symbols: vec!["BTCUSDT".into()],
@@ -147,7 +147,11 @@ async fn live_loop_resyncs_records_and_replays_identically() {
         rotate_bytes: 4_096, // Force rotation during the run.
         channel_capacity: 1_000,
         features: config.clone(),
-        features_out: Some(features_out.clone()),
+        features_dir: Some(features_dir.clone()),
+        features_store: market_data::store::StoreConfig {
+            rotate_bytes: 8_192, // Several feature files too.
+            max_files: 1_000,
+        },
     };
     let stop = async move {
         fake.done.notified().await;
@@ -167,7 +171,12 @@ async fn live_loop_resyncs_records_and_replays_identically() {
         }
     })
     .unwrap();
-    let live = std::fs::read_to_string(&features_out).unwrap();
+    let feature_files = market_data::store::row_files(&features_dir, "features").unwrap();
+    assert!(feature_files.len() > 1, "feature rotation expected");
+    let live = market_data::store::read_rows(&features_dir, "features")
+        .unwrap()
+        .join("\n")
+        + "\n";
 
     assert!(stats.files > 1, "rotation expected");
     assert_eq!(stats.truncated_files, 0);

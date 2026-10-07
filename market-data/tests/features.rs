@@ -7,7 +7,8 @@ use market_data::binance::{envelope_from_snapshot, envelope_from_stream};
 use market_data::event::{connection, session_start, Envelope};
 use market_data::features::{FeatureConfig, FeatureSnapshot};
 use market_data::pipeline::Pipeline;
-use market_data::recorder::{replay, FeatureWriter, Recorder};
+use market_data::recorder::{replay, Recorder};
+use market_data::store::{read_rows, row_files, RowStore, StoreConfig};
 
 const S: &str = "BTCUSDT";
 const GOLDEN: &str = "tests/fixtures/golden_features.ndjson";
@@ -289,20 +290,26 @@ fn malformed_depth_does_not_move_the_clock() {
     assert_eq!(rows[1].feature_ts_ms, Some(1_200));
 }
 
+/// Rows written through the bounded store read back identically to the in-memory rows.
 #[test]
-fn feature_file_is_partial_until_finished_and_never_overwritten() {
+fn feature_store_round_trips_rows() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("f.ndjson");
-    let mut out = FeatureWriter::create(&path).unwrap();
-    out.write(&run(session())[0]).unwrap();
-    out.flush().unwrap();
-    assert!(!path.exists());
-    assert!(dir.path().join("f.ndjson.partial").exists());
-    out.finish().unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 1);
-    assert!(!dir.path().join("f.ndjson.partial").exists());
-    let err = FeatureWriter::create(&path).err().unwrap();
-    assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+    let small = StoreConfig {
+        rotate_bytes: 1_500,
+        max_files: 100,
+    };
+    let mut store = RowStore::create(dir.path(), "features", small).unwrap();
+    let rows = run(session());
+    for row in &rows {
+        store.write(row).unwrap();
+    }
+    store.finish().unwrap();
+    assert!(
+        row_files(dir.path(), "features").unwrap().len() > 1,
+        "rotation expected"
+    );
+    let back = read_rows(dir.path(), "features").unwrap().join("\n") + "\n";
+    assert_eq!(back, ndjson(&rows));
 }
 
 /// Depth keeps flowing while trades stop: past the stale threshold the row withholds CVD

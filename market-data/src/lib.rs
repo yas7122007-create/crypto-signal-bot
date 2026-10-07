@@ -8,3 +8,4 @@ pub mod features;
 pub mod live;
 pub mod pipeline;
 pub mod recorder;
+pub mod store;

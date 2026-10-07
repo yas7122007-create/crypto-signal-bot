@@ -20,7 +20,8 @@ use crate::binance::{
 use crate::event::{connection, now_ns, session_start, Envelope};
 use crate::features::FeatureConfig;
 use crate::pipeline::{Action, Pipeline};
-use crate::recorder::{FeatureWriter, Recorder};
+use crate::recorder::Recorder;
+use crate::store::{RowStore, StoreConfig};
 
 const MAX_SNAPSHOT_BYTES: usize = 5 * 1024 * 1024;
 /// Depth limit=1000 costs 20 weight; one per second stays at half of Binance's 2400/min,
@@ -39,8 +40,9 @@ pub struct Config {
     pub rotate_bytes: u64,
     pub channel_capacity: usize,
     pub features: FeatureConfig,
-    /// Optional NDJSON file of feature rows; replay of the recording reproduces it exactly.
-    pub features_out: Option<PathBuf>,
+    /// Optional directory of feature rows; replay of the recording reproduces them exactly.
+    pub features_dir: Option<PathBuf>,
+    pub features_store: StoreConfig,
 }
 
 /// Reconnect delay: 1 s, 2 s, 4 s ... capped at 60 s.
@@ -60,9 +62,9 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
     let (snap_tx, snap_rx) = mpsc::channel::<String>(1024);
     let mut recorder = Recorder::create(&cfg.out, cfg.rotate_after, cfg.rotate_bytes)?;
     let mut features = cfg
-        .features_out
+        .features_dir
         .as_deref()
-        .map(FeatureWriter::create)
+        .map(|dir| RowStore::create(dir, "features", cfg.features_store.clone()))
         .transpose()?;
     let mut pipeline = Pipeline::new(cfg.features.clone());
     // The feature config travels with the recording, so replay can verify it.
@@ -96,7 +98,8 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
                     if let Some(out) = features.as_mut() {
                         out.flush()?;
                     }
-                    eprintln!("{}", serde_json::json!({"status": pipeline.summary()}));
+                    let dropped = features.as_ref().map_or(0, |f| f.dropped_rows);
+                    eprintln!("{}", serde_json::json!({"status": pipeline.summary(), "feature_rows_dropped": dropped}));
                 }
                 _ = &mut shutdown => return Ok(()),
             }
@@ -127,7 +130,7 @@ fn ingest(
     env: Envelope,
     recorder: &mut Recorder,
     pipeline: &mut Pipeline,
-    features: &mut Option<FeatureWriter>,
+    features: &mut Option<RowStore>,
 ) -> io::Result<Vec<Action>> {
     let env = recorder.record(env)?;
     let step = pipeline.handle(&env);
