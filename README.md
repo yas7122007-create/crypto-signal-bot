@@ -3,7 +3,7 @@
 
 ## Status fitur
 
-Bot melakukan scan terjadwal, konfirmasi AI, paper trading, dan pengiriman sinyal teks ke Telegram jika diaktifkan. Gambar sinyal, perintah `/signal`, dan chat Telegram belum tersedia.
+Bot melakukan scan terjadwal, penjelasan sinyal oleh NVIDIA Nemotron, paper trading, dan pengiriman sinyal teks ke Telegram jika diaktifkan. Gambar sinyal, perintah `/signal`, dan chat Telegram belum tersedia.
 
 Engine membaca candle tertutup 15m, 1h, dan 4h untuk menghasilkan kandidat LONG, SHORT, atau HOLD beserta alasannya. Perhitungan mencakup EMA20/50, ATR, support/resistance, volume relatif, taker delta, sweep, breakout, dan harga entry/SL/TP.
 
@@ -26,9 +26,9 @@ Mengambil data Binance Futures dan menyimpan input agar dapat dianalisis ulang:
 
 `--save-snapshot` membuat file baru dan menolak menimpa file yang sudah ada. Buat folder tujuan terlebih dahulu jika memakai lokasi lain. Pengambilan live memerlukan akses ke Binance; kegagalan HTTP dilaporkan dengan exit code 1 tanpa mengganti data dengan data sintetis.
 
-Hasil JSON berlabel `ANALYSIS_ONLY` dan `market_checks: NOT_RUN`. LONG/SHORT di sini adalah kandidat engine: pemeriksaan spread, funding, jurnal, serta konfirmasi AI dilakukan pada alur bot penuh. Perintah ini tidak membuat sinyal tersimpan, mengirim Telegram, atau memasang order. HOLD adalah hasil analisis normal dengan exit code 0.
+Hasil JSON berlabel `ANALYSIS_ONLY` dan `market_checks: NOT_RUN`. LONG/SHORT di sini adalah kandidat engine: pemeriksaan spread, funding, jurnal, serta penjelasan Nemotron dilakukan pada alur bot penuh. Perintah ini tidak membuat sinyal tersimpan, mengirim Telegram, atau memasang order. HOLD adalah hasil analisis normal dengan exit code 0.
 
-Mode offline hanya memakai standard library Python, tanpa layanan database, Prefect, Ollama, maupun koneksi jaringan. Mode live menggunakan client Binance yang sudah ada dan konfigurasi aturan dari `.env`.
+Mode offline hanya memakai standard library Python, tanpa layanan database, Prefect, model AI, maupun koneksi jaringan. Mode live menggunakan client Binance yang sudah ada dan konfigurasi aturan dari `.env`.
 
 ## Format snapshot
 
@@ -51,6 +51,8 @@ Urutan field kline mengikuti [dokumentasi market data Binance](https://developer
 .\.venv\Scripts\python.exe check.py --db
 ```
 
+GitHub Actions (`.github/workflows/ci.yml`) menjalankan `check.py` dan kompilasi semua modul pada Python 3.12 dan 3.13 untuk setiap pull request dan push ke `main`, serta menolak `.env` yang ter-commit dan string berbentuk kredensial. Semua pemanggilan eksternal di-mock.
+
 Pemeriksaan kedua memerlukan MariaDB yang terkonfigurasi dan tabel bot; perubahan uji database di-rollback. Pemeriksaan mencakup arah LONG/SHORT/HOLD, candle tertutup, data tidak valid, biaya/funding simulasi, replay JSON tanpa dependency, penolakan overwrite, dan kegagalan AI. Pengujian ini memakai data sintetis.
 
 ## Pemulihan DNS Binance
@@ -69,15 +71,40 @@ Analisis Python sehari-hari tetap dapat dijalankan dari terminal biasa.
 
 ## Bot terjadwal
 
-Alur yang sudah ada tetap dijalankan melalui `start.ps1`, dengan MariaDB, PostgreSQL untuk Prefect, dan model Ollama yang dikonfigurasi di `.env`. Periksa kesiapan layanan dengan:
+Alur yang sudah ada tetap dijalankan melalui `start.ps1`, dengan MariaDB, PostgreSQL untuk Prefect, dan lapisan AI yang dikonfigurasi di `.env` (default Nemotron via API NVIDIA; Ollama hanya untuk mode legacy). Periksa kesiapan layanan dengan:
 
 ```powershell
 .\.venv\Scripts\python.exe setup_local.py doctor
 ```
 
-Untuk instalasi layanan baru, sediakan MariaDB dan Ollama. Jalankan `setup_local.py prepare` untuk membuat `.env` beserta password lokal dan tabel bot; sesuaikan kredensial MariaDB bila diperlukan. Unduh model Ollama sesuai `OLLAMA_MODEL`, lalu jalankan `setup_local.py install-postgres` dan `setup_local.py services` menggunakan Python virtual environment. Simpan token/password hanya di `.env`. Pengiriman Telegram dikendalikan oleh `TELEGRAM_ENABLED` dan default-nya `false`.
+Untuk instalasi layanan baru, sediakan MariaDB. Jalankan `setup_local.py prepare` untuk membuat `.env` beserta password lokal dan tabel bot; sesuaikan kredensial MariaDB bila diperlukan. Isi `NVIDIA_API_KEY`, lalu jalankan `setup_local.py install-postgres` dan `setup_local.py services` menggunakan Python virtual environment. Simpan token/password hanya di `.env`. Pengiriman Telegram dikendalikan oleh `TELEGRAM_ENABLED` dan default-nya `false`.
 
-## Hermes Agent lokal
+## Lapisan penjelasan NVIDIA Nemotron
+
+`AI_PROVIDER=nemotron` (default) memakai [NVIDIA Nemotron 3 Super 120B-A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) melalui API hosted NVIDIA yang kompatibel dengan OpenAI (`NVIDIA_BASE_URL`, `NEMOTRON_MODEL`). Model 120B ini tidak dijalankan di mesin bot.
+
+Nemotron dipanggil hanya **setelah** kandidat lulus aturan engine, risk gate pasar, dan gate jurnal. Ia menerima bukti terstruktur (fitur 15m/1h/4h, entry/SL/TP, spread, funding, R/R bersih, ringkasan jurnal) dan mengembalikan JSON tervalidasi: `thesis`, `bullish_evidence`, `bearish_evidence`, `contradictions`, `forecast_consistency`, `uncertainty_summary`, `risk_summary`, `operator_explanation`, ditambah metadata audit (`model_name`, `model_version`, `latency_ms`, `generated_at_ms`, `signal_id`, `status`). Field forecast bernilai `NOT_AVAILABLE` sampai PatchTST/Toto tersedia.
+
+**Perubahan perilaku:** default `AI_PROVIDER` kini `nemotron`. Instalasi lama yang tidak mengisi `AI_PROVIDER` sebelumnya memakai veto Ollama; kini sinyal yang lulus aturan engine terbit tanpa veto AI dan bot mencatat peringatan. Isi `AI_PROVIDER=ollama` atau `hermes` untuk mempertahankan veto legacy.
+
+Nemotron tidak memutuskan apa pun: ia tidak dapat mengubah arah, harga, atau hasil risk gate, dan kegagalannya tidak menahan sinyal.
+
+| Kondisi | Perilaku |
+| --- | --- |
+| Tersedia | Penjelasan Nemotron disimpan di sinyal dan dikirim ke Telegram |
+| Timeout, error 5xx, respons rusak | `DEGRADED`: ringkasan deterministik engine; sisa siklus scan melewati Nemotron |
+| Rate limit 429 | Retry terbatas mengikuti `Retry-After` dalam batas `NEMOTRON_TIMEOUT_SECONDS` |
+| HTTP 202 (pending) | Polling `/status/{NVCF-REQID}` sesuai dokumentasi NVIDIA, tanpa mengirim ulang request, dalam batas waktu yang sama |
+| Kunci kosong | `DISABLED`: tanpa panggilan jaringan; sinyal kuantitatif tetap berjalan |
+| Hasil kedaluwarsa | `STALE`: penjelasan tidak ditampilkan (`NEMOTRON_MAX_AGE_SECONDS`) |
+
+Uji live opsional (memerlukan `NVIDIA_API_KEY` di `.env`; kunci tidak pernah dicetak): `python check.py --nemotron-live` mencetak status HTTP, latency, ukuran respons, jumlah request, dan apakah schema valid.
+
+`AI_PROVIDER=mock` menghasilkan ringkasan deterministik tanpa jaringan untuk demo atau pengujian. Kunci API hanya dibaca dari `.env` dan tidak pernah ditulis ke log, hasil, atau pesan error.
+
+## Hermes Agent lokal (legacy, deprecated)
+
+Mode ini dipertahankan sementara untuk rollback. Berbeda dengan Nemotron, model lokal di mode ini bertindak sebagai veto: kandidat hanya menjadi sinyal jika model menjawab `CONFIRM`.
 
 Bot mendukung `AI_PROVIDER=ollama` (langsung) atau `AI_PROVIDER=hermes` (melalui Hermes Agent). Hermes hanya memeriksa kandidat dan mengembalikan JSON `CONFIRM`/`HOLD`; engine tetap menentukan entry, SL, TP, serta batas risiko. Respons gagal, terpotong, tidak valid, atau melewati batas waktu menjadi HOLD.
 
@@ -131,3 +158,40 @@ Lihat log di `runtime/startup.log`, status layanan dengan `setup_local.py doctor
 `requirements.txt` membatasi SQLAlchemy di bawah 2.1 karena [bug kompatibilitas scheduler Prefect](https://github.com/PrefectHQ/prefect/issues/23199). Status API sehat saja belum membuktikan jadwal bekerja; pastikan flow run terjadwal muncul dan selesai di dashboard.
 
 Setelah bot berjalan, `python check.py --scheduler` dari virtual environment memeriksa bahwa scheduler aktif dan sudah membuat flow run. Pemeriksaan ini hanya membaca status.
+
+## Rust market data (Phase 1–2)
+
+`market-data/` adalah layanan Rust untuk data publik Binance USD-M Futures: WebSocket gabungan (depth 100 ms, aggTrade, bookTicker, markPrice), sinkronisasi local L2 order book dengan snapshot + diff sesuai aturan Binance (`U <= lastUpdateId <= u`, lalu `pu` harus sama dengan `u` sebelumnya), recorder, dan replay deterministik. Tidak ada API key, endpoint bertanda tangan, maupun endpoint order. Arsitektur target dan urutan fase ada di [docs/architecture-v2.md](docs/architecture-v2.md).
+
+```bash
+cd market-data
+cargo run --release -- record --symbols BTCUSDT,ETHUSDT --out ../recordings
+cargo run --release -- replay --input ../recordings --audit
+```
+
+- Gap urutan, book bersilang, diff rusak, atau stream depth yang diam lebih dari 30 detik membatalkan book dan meminta snapshot baru; book yang tidak valid tidak pernah dipakai. Snapshot yang diminta sebelum koneksi putus diabaikan.
+- Maksimal 45 simbol per koneksi (4 stream per simbol, batas Binance 200 stream). SIGINT/SIGTERM menutup rekaman dengan rapi.
+- Putus koneksi dicatat sebagai event, sehingga replay membatalkan book pada titik yang sama seperti live. Reconnect memakai backoff 1–60 detik yang baru direset setelah koneksi bertahan 60 detik; koneksi tanpa pesan selama 30 detik dianggap stale.
+- Snapshot REST (bobot 20) diambil maksimal satu per detik, setengah dari batas 2400/menit, dan mengikuti `Retry-After` saat 429/418.
+- Rekaman: `events-<waktu>-<seq>.ndjson.gz`, rotasi per jam atau 512 MB, flush tiap detik. Setelah crash, replay membaca hingga flush terakhir dan melaporkan file terpotong; baris rusak di tengah file menghentikan replay.
+- Uji: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (offline, tanpa akses Binance; uji live-loop memakai server palsu di 127.0.0.1, bukan Binance).
+
+### Fitur order-flow (Phase 2 + 2.5)
+
+```bash
+cargo run --release -- record --symbols BTCUSDT --out ../recordings --features-dir ../features-live
+cargo run --release -- replay --input ../recordings --features-dir ../features-replay
+# Opsional (nilai default): --cvd-windows-ms 1000,5000,15000,60000 --obi-levels 10,50
+#   --trade-quiet-ms 10000 --trade-stale-ms 120000 --features-rotate-mb 256 --features-max-files 64
+```
+
+Satu baris fitur dikeluarkan setelah setiap event depth yang membuat book tersinkron. Kontrak lengkap (schema v2: arti field, timestamp, nilai `null`, epoch CVD, kedalaman OBI, status stream trade) ada di [docs/feature-schema.md](docs/feature-schema.md). Ringkasnya:
+
+- Replay dari rekaman yang sama menghasilkan baris fitur yang identik byte demi byte. Konfigurasi fitur ikut tercatat di `session_start`; `replay` menolak rekaman dengan konfigurasi berbeda kecuali diberi `--allow-config-mismatch`.
+- `trade_state` membedakan `active`, `quiet` (pasar sepi yang wajar) dan `stale` (trade diam terlalu lama sementara depth tetap mengalir); saat `stale`, CVD dan delta tidak dilaporkan (`null`), bukan diisi nol.
+- File fitur berupa gzip NDJSON yang dirotasi, dengan batas jumlah file per run; semua file sebuah run berakhiran `.partial` sampai run selesai dengan bersih, dan replay gagal bila ada baris yang terbuang karena batas file.
+
+Uji asap dengan Binance asli (data publik saja): `scripts/binance-smoke.sh 300 BTCUSDT`. Jika jaringan atau proxy memblokir Binance, skrip gagal dengan kode 3; TLS tidak pernah dilemahkan.
+
+Layanan ini belum terhubung ke bot Python; antarmuka Python/Rust adalah Fase 4.
+

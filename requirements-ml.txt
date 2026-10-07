@@ -1,0 +1,4 @@
+# Phase 3 forecasting only (v2/). Not required by the Python bot itself (requirements.txt),
+# so CI can run the bot's checks without these, and a VPS without GPU/ML needs can skip them.
+numpy>=1.26,<3
+torch>=2.2,<3

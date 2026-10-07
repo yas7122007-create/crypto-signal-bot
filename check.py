@@ -1,12 +1,13 @@
-"""Runnable checks: python check.py [--db] [--hermes] [--scheduler]. No orders/messages."""
+"""Runnable checks: python check.py [--db] [--hermes] [--scheduler] [--nemotron-live]. No orders/messages."""
 from dataclasses import asdict
 from contextlib import redirect_stderr
 from io import StringIO
 import json
+from textwrap import dedent as textwrap_dedent
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import sys
 
 from engine import (INTERVALS, Rules, ai_decision, analyze, candles, features,
@@ -55,6 +56,484 @@ def candidate(short=False):
                 stop=105 if short else 95, target=90 if short else 110,
                 atr=2, setup="breakout", regime="test", reason="synthetic test",
                 rules=asdict(Rules()))
+
+
+def nemotron_checks(candidate, rules):
+    import logging
+    import httpx
+    import reasoning
+    from engine import signal_id
+    from services import signal_text
+    key = "nvapi-SECRET_TEST_KEY"
+    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": key, "NEMOTRON_TIMEOUT_SECONDS": "30",
+           "NVIDIA_BASE_URL": reasoning.DEFAULT_URL, "NEMOTRON_MODEL": reasoning.DEFAULT_MODEL,
+           "NEMOTRON_MAX_RETRIES": "2", "NEMOTRON_MAX_AGE_SECONDS": "600", "NEMOTRON_THINKING": "false"}
+    url = "https://integrate.api.nvidia.com/v1/chat/completions"
+    request = httpx.Request("POST", url)
+    answer = dict(thesis="Tren 4h/1h dan breakout 15m selaras", bullish_evidence=["Volume relatif tinggi"],
+                  bearish_evidence=["Jurnal paper masih sedikit"], contradictions=[],
+                  forecast_consistency="NOT_AVAILABLE", uncertainty_summary="Tanpa forecast",
+                  risk_summary="SL di bawah pivot", operator_explanation="Setup LONG sesuai aturan engine")
+
+    def reply(content=None, status=200, finish="stop", headers=None, body=None):
+        if body is None:
+            body = {"model": "nvidia/nemotron-3-super-120b-a12b", "choices": [
+                {"finish_reason": finish, "message": {"content": content if content is not None else json.dumps(answer)}}]}
+        return httpx.Response(status, json=body, headers=headers, request=request)
+
+    def run(responses, extra=None, polls=(), subject=None):
+        subject = subject or candidate
+        frozen = json.dumps(subject, sort_keys=True)
+        with patch.dict("os.environ", {**env, **(extra or {})}), \
+                patch("reasoning.httpx.post", side_effect=responses) as post, \
+                patch("reasoning.httpx.get", side_effect=list(polls)) as get, \
+                patch("reasoning.time.sleep") as sleep:
+            result = reasoning.explain(subject, {"sample_count": 0, "average_net_r": None, "recent_cases": []})
+        # The explanation layer must never touch the deterministic decision (action, entry, stop, target).
+        assert json.dumps(subject, sort_keys=True) == frozen
+        run.get = get
+        return result, post, sleep
+
+    # Target provider needs no Ollama, Hermes or Qwen settings.
+    clean = {"NVIDIA_API_KEY": key}
+    with patch.dict("os.environ", clean, clear=True), patch("reasoning.httpx.post", return_value=reply()) as post:
+        assert reasoning.provider_name() == "nemotron"
+        result = reasoning.explain(candidate, {})
+    assert result["status"] == "OK" and result["source"] == "nemotron"
+    assert result["model_name"] == "nvidia/nemotron-3-super-120b-a12b"
+    assert result["signal_id"] == signal_id(candidate) and result["decision_authority"] == "quant_engine"
+    sent = post.call_args
+    assert sent.args[0] == url and sent.kwargs["headers"]["Authorization"] == "Bearer " + key
+    body = sent.kwargs["json"]
+    assert body["chat_template_kwargs"] == {"enable_thinking": False} and body["stream"] is False
+    assert "NOT_AVAILABLE" in body["messages"][1]["content"] and key not in json.dumps(body)
+    print("PASS: Nemotron default provider, model id, auth header, structured evidence, no Qwen config")
+
+    result, post, _ = run([reply("```json\n" + json.dumps(answer) + "\n```")])
+    assert result["status"] == "OK"
+    result, post, _ = run([reply("<think>internal</think>\n" + json.dumps(answer))])
+    assert result["status"] == "OK" and result["thesis"] == answer["thesis"]
+    for broken in ("not json", "[]", json.dumps({**answer, "decision": "CONFIRM"}),
+                   json.dumps({**answer, "forecast_consistency": "BULLISH"}),
+                   json.dumps({**answer, "bullish_evidence": ["x"] * 7}),
+                   json.dumps({**answer, "thesis": " "}),
+                   json.dumps({**answer, "contradictions": [1]})):
+        result, post, _ = run([reply(broken)])
+        assert result["status"] == "DEGRADED" and result["source"] == "deterministic", broken
+    result, _, _ = run([reply(finish="length")])
+    assert result["status"] == "DEGRADED"
+    result, _, _ = run([reply(body={"choices": []})])
+    assert result["status"] == "DEGRADED"
+    print("PASS: Nemotron schema validation, fenced/think output, malformed and truncated responses degrade")
+
+    result, post, sleep = run([reply(status=429, headers={"Retry-After": "3"}), reply()])
+    assert result["status"] == "OK" and post.call_count == 2 and sleep.call_args.args[0] == 3
+    result, post, _ = run([reply(status=429)] * 3)
+    assert result["status"] == "DEGRADED" and result["error"] == "HTTP 429" and post.call_count == 3
+    result, post, _ = run([reply(status=503), reply()])
+    assert result["status"] == "OK" and post.call_count == 2
+    result, post, _ = run([reply(status=401)])
+    assert result["status"] == "DEGRADED" and post.call_count == 1  # Bad credentials are never retried.
+    result, post, _ = run([reply(status=429, headers={"Retry-After": "120"})])
+    assert result["status"] == "DEGRADED" and post.call_count == 1  # Wait would exceed the deadline.
+    result, _, _ = run(httpx.ReadTimeout("timeout " + key))
+    assert result["status"] == "DEGRADED" and result["error"] == "ReadTimeout"
+    result, _, _ = run(RuntimeError("boom " + key))
+    assert result["status"] == "DEGRADED"
+    result, post, _ = run([reply(status=403)])
+    assert result["status"] == "DEGRADED" and result["error"] == "HTTP 403" and post.call_count == 1
+    result, post, _ = run([reply(status=204, body={})])
+    assert result["status"] == "DEGRADED"
+    print("PASS: Nemotron rate limit backoff, 5xx retry, invalid credentials, timeout, unexpected errors")
+
+    pending = lambda rid="req-123", wait=None: reply(status=202, body={}, headers={
+        **({"NVCF-REQID": rid} if rid is not None else {}), **({"NVCF-POLL-SECONDS": wait} if wait else {})})
+    result, post, sleep = run([pending()], polls=[pending(), reply()])
+    assert result["status"] == "OK" and post.call_count == 1 and run.get.call_count == 2
+    assert run.get.call_args.args[0] == "https://integrate.api.nvidia.com/v1/status/req-123"
+    assert run.get.call_args.kwargs["headers"]["Authorization"] == "Bearer " + key
+    result, _, _ = run([pending()], polls=[pending()] * 200)
+    assert result["status"] == "DEGRADED" and run.get.call_count <= 120  # Bounded polling.
+    for rid in (None, "../../v2/x", ""):
+        result, _, _ = run([pending(rid)])
+        assert result["status"] == "DEGRADED" and not run.get.called
+    result, _, _ = run([pending()], polls=[reply(status=422, body={"detail": "bad"})])
+    assert result["status"] == "DEGRADED" and result["error"] == "HTTP 422"
+    result, _, _ = run([pending(wait="60")], polls=[reply()])
+    assert result["status"] == "OK" and run.get.called  # Server poll hint is capped at 5 s.
+    print("PASS: Nemotron 202 async polling, bounded wait, request id validation, poll errors")
+
+    with patch.dict("os.environ", {**env, "NVIDIA_API_KEY": ""}), patch("reasoning.httpx.post") as post:
+        result = reasoning.explain(candidate, {})
+    post.assert_not_called()
+    assert result["status"] == "DISABLED" and result["operator_explanation"]
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post") as post:
+        result = reasoning.explain(candidate, {}, skip="Nemotron dilewati")
+    post.assert_not_called()
+    assert result["status"] == "DEGRADED" and result["error"] == "Nemotron dilewati"
+    with patch.dict("os.environ", {"AI_PROVIDER": "mock"}), patch("reasoning.httpx.post") as post:
+        result = reasoning.explain(candidate, {})
+    post.assert_not_called()
+    assert result["status"] == "OK" and result["model_name"] == "mock"
+    assert any("volume" in item.lower() for item in result["bullish_evidence"])
+    for invalid in ("http://example.com/v1", "ftp://x", "https://"):
+        with patch.dict("os.environ", {**env, "NVIDIA_BASE_URL": invalid}), patch("reasoning.httpx.post") as post:
+            assert reasoning.explain(candidate, {})["status"] == "DEGRADED"
+        post.assert_not_called()  # Never send the key over plain HTTP to a remote host.
+    expect_error(lambda: reasoning.check_provider("qwen"))
+    for name in ("nemotron", "mock", "ollama", "hermes"):
+        reasoning.check_provider(name)
+    print("PASS: Nemotron missing key, skipped, mock provider, unsafe base URL, provider validation")
+
+    signal = new_signal(candidate, candidate["candle_ms"] + 960_000, rules)
+    fresh, _, _ = run([reply()])
+    signal["reasoning"] = fresh
+    now = fresh["generated_at_ms"] + 1000
+    assert reasoning.mark_stale(fresh, signal, now)["status"] == "OK"
+    assert reasoning.mark_stale(fresh, signal, now + 3_600_000)["status"] == "STALE"
+    assert reasoning.mark_stale(fresh, signal, now - 30_000)["status"] == "OK"  # Small clock skew.
+    assert reasoning.mark_stale(fresh, signal, now - 120_000)["status"] == "STALE"
+    assert reasoning.mark_stale(fresh, {**signal, "candle_ms": 900_000}, now)["status"] == "STALE"
+    assert signal["action"] == candidate["action"] and signal["entry"] == candidate["entry"]
+    text = signal_text(signal)
+    assert "Nemotron (penjelasan, bukan keputusan): Setup LONG" in text
+    signal["reasoning"] = reasoning.mark_stale(fresh, signal, now + 3_600_000)
+    text = signal_text(signal)
+    assert "Nemotron STALE" in text and "Setup LONG sesuai" not in text
+    with patch.dict("os.environ", {"NEMOTRON_MAX_AGE_SECONDS": "broken"}):
+        assert reasoning.mark_stale(fresh, signal, now)["status"] == "STALE"
+    degraded, _, _ = run(httpx.ReadTimeout("x"))
+    text = signal_text({**signal, "reasoning": degraded})
+    assert "Ringkasan engine (Nemotron DEGRADED)" in text and key not in text
+    with patch.dict("os.environ", {**env, "NVIDIA_API_KEY": ""}):
+        disabled = reasoning.explain(candidate, {})
+    assert "Nemotron DISABLED" in signal_text({**signal, "reasoning": disabled})
+    legacy = {k: v for k, v in signal.items() if k != "reasoning"}
+    assert "AI: Model lokal" in signal_text({**legacy, "ai": {"decision": "CONFIRM", "reason": "Model lokal setuju"}})
+    short = {**candidate, "action": "SHORT", "entry": 100.0, "stop": 105.0, "target": 90.0}
+    assert run([reply()], subject=short)[0]["status"] == "OK"
+    assert run(RuntimeError("x"), subject={"symbol": "BROKENUSDT"})[0]["status"] == "DEGRADED"
+    print("PASS: stale Nemotron result suppressed, deterministic signal unchanged, Telegram text")
+
+    logs = StringIO()
+    handler = logging.StreamHandler(logs)
+    root = logging.getLogger()
+    root.addHandler(handler)
+    level = root.level
+    root.setLevel(logging.DEBUG)
+    try:
+        outputs = [run([reply()])[0], run([reply(status=401)])[0],
+                   run(httpx.ConnectError("SECRET " + key))[0], run(ValueError("bad " + key))[0]]
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(level)
+    assert key not in logs.getvalue() and key not in json.dumps(outputs) and "SECRET" not in json.dumps(outputs)
+    print("PASS: NVIDIA API key never appears in logs or stored reasoning results")
+    scan_checks(candidate, rules)
+
+
+def gate_checks(candidate, rules):
+    """Phase 5B: confirm_gate() never returns CONFIRM except from a parsed, schema-valid
+    CONFIRM; every other path (disabled, degraded, provider error, bad JSON, unknown
+    provider) is HOLD."""
+    import httpx
+    import reasoning
+    history = {"sample_count": 25, "average_net_r": 0.1}
+    # Fix 5 (adversarial-audit corrective pass): V2_MODE is the master kill switch, checked
+    # inside confirm_gate() itself. With it unset/"off" (today's default everywhere), the
+    # gate must return HOLD/DISABLED and must call neither evidence() nor any provider --
+    # not Nemotron's HTTP client, not even the mock provider's local computation.
+    with patch.dict("os.environ", {}, clear=False):
+        import os as _os
+        _os.environ.pop("V2_MODE", None)
+        with patch("reasoning.evidence", side_effect=AssertionError("evidence() called under V2_MODE=off")):
+            off = reasoning.confirm_gate(candidate, history)
+            assert off["decision"] == "HOLD" and off["status"] == "DISABLED" and off["error"] == "V2_MODE=off"
+    print("PASS: confirm_gate() under V2_MODE=off/unset: HOLD/DISABLED, never calls evidence() or a provider")
+    # The rest of this function exercises the provider paths, which are only reachable once
+    # V2_MODE is explicitly "on" -- exactly the gate this fix adds.
+    with patch.dict("os.environ", {"V2_MODE": "on"}):
+        with patch.dict("os.environ", {"AI_PROVIDER": "mock"}):
+            result = reasoning.confirm_gate(candidate, history)
+            assert result["decision"] == "CONFIRM" and result["risk_flags"] == []
+            thin = reasoning.confirm_gate(candidate, {"sample_count": 0})
+            assert thin["decision"] == "HOLD" and "jurnal_paper_masih_tipis" in thin["risk_flags"]
+        with patch.dict("os.environ", {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": ""}):
+            disabled = reasoning.confirm_gate(candidate, history)
+            assert disabled["decision"] == "HOLD" and disabled["status"] == "DISABLED"
+        with patch.dict("os.environ", {"AI_PROVIDER": "qwen"}):
+            invalid = reasoning.confirm_gate(candidate, history)
+            assert invalid["decision"] == "HOLD" and invalid["status"] == "ERROR"
+        with patch.dict("os.environ", {"AI_PROVIDER": "ollama"}):
+            legacy = reasoning.confirm_gate(candidate, history)
+            assert legacy["decision"] == "HOLD" and legacy["status"] == "DEGRADED"
+    env = {"V2_MODE": "on", "AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": "nvapi-TEST",
+           "NEMOTRON_TIMEOUT_SECONDS": "30",
+           "NVIDIA_BASE_URL": reasoning.DEFAULT_URL, "NEMOTRON_MODEL": reasoning.DEFAULT_MODEL,
+           "NEMOTRON_MAX_RETRIES": "0", "NEMOTRON_THINKING": "false"}
+
+    def reply(decision="CONFIRM"):
+        body = {"decision": decision, "confidence": 0.8, "rationale": "ok", "risk_flags": []}
+        r = MagicMock(status_code=200)
+        r.json.return_value = {"model": "nvidia/nemotron-3-super-120b-a12b",
+                               "choices": [{"finish_reason": "stop",
+                                            "message": {"content": json.dumps(body)}}]}
+        return r
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post", return_value=reply()):
+        ok = reasoning.confirm_gate(candidate, history)
+        assert ok["decision"] == "CONFIRM" and ok["status"] == "OK"
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post", return_value=reply("HOLD")):
+        held = reasoning.confirm_gate(candidate, history)
+        assert held["decision"] == "HOLD"
+    bad = MagicMock(status_code=200)
+    bad.json.return_value = {"model": "x", "choices": [{"finish_reason": "stop",
+                                                         "message": {"content": "not json"}}]}
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post", return_value=bad):
+        malformed = reasoning.confirm_gate(candidate, history)
+        assert malformed["decision"] == "HOLD" and malformed["status"] == "ERROR"
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post",
+                                              side_effect=httpx.ConnectError("down")):
+        down = reasoning.confirm_gate(candidate, history)
+        assert down["decision"] == "HOLD"
+    print("PASS: confirm_gate CONFIRM only from a valid provider reply; every failure is HOLD")
+
+
+def v2_bridge_checks(candidate):
+    """Phase 4: V2_MODE defaults to off (today's exact behavior); shadow/on call the bridge,
+    and any bridge failure degrades to NOT_AVAILABLE rather than raising into Nemotron."""
+    import os
+    import reasoning
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("V2_MODE", None)
+        assert reasoning.v2_mode() == "off"
+        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+    with patch.dict("os.environ", {"V2_MODE": "qwen"}):
+        expect_error(reasoning.v2_mode)
+        # Self-review finding (independent adversarial review of this corrective pass):
+        # v2_mode() itself must still raise for an invalid value (checked above), but every
+        # caller that ACTS on it must fail closed, never propagate that raise -- a V2_MODE
+        # typo must never crash a candidate scan or any future confirm_gate() caller.
+        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+        assert reasoning.toto_evidence(candidate, {"status": "ok"}, 0) == "NOT_AVAILABLE"
+        gated = reasoning.confirm_gate(candidate, {})
+        assert gated["decision"] == "HOLD" and gated["status"] == "DISABLED"
+        reasoning.explain(candidate, {})  # must not raise either.
+    print("PASS: an invalid V2_MODE degrades every entry point to off, never raises")
+    with patch.dict("os.environ", {"V2_MODE": "on"}):
+        # No V2_STATE_DIR/V2_MODEL_DIR configured: fails closed, no crash.
+        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+    with patch.dict("os.environ", {"V2_MODE": "shadow", "V2_STATE_DIR": "/nonexistent",
+                                   "V2_MODEL_DIR": "/nonexistent"}):
+        # With dirs configured but numpy/torch not installed (requirements-ml.txt is
+        # optional): the import itself fails, and that must degrade too, not raise.
+        result = reasoning.patchtst_forecast(candidate, 0)
+        assert result == "NOT_AVAILABLE" or result.get("status") == "unavailable"
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            # numpy (and maybe torch) present: exercise a bridge call that raises too.
+            with patch("v2.bridge.forecast", side_effect=RuntimeError("boom")):
+                assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+            # Wired through v2.resource_gate: under severe pressure, or with an invalid gate
+            # threshold, the bridge call is never attempted and the public path still just
+            # returns NOT_AVAILABLE (fail closed, nothing raised).
+            import v2.resource_gate as _rg
+            never = patch("v2.bridge.forecast", side_effect=AssertionError("PatchTST ran"))
+            with patch.object(_rg, "check", return_value=_rg.SEVERE), never:
+                assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+            for name in ("V2_RESOURCE_MAX_LOAD_PER_CORE", "V2_RESOURCE_MIN_FREE_MB"):
+                for bad in ("bogus", "nan", "inf", "0"):
+                    with patch.dict("os.environ", {name: bad}), never:
+                        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+            print("PASS: ResourceGate pressure/invalid config never runs PatchTST, never raises")
+    ev = reasoning.evidence(candidate, {})
+    assert ev["forecast"]["toto"] == "NOT_AVAILABLE"
+    print("PASS: V2_MODE off/shadow/on, invalid mode rejected, bridge failures degrade to NOT_AVAILABLE")
+    # Fix 1 (adversarial-audit corrective pass): V2_MODE="off" must not merely return
+    # NOT_AVAILABLE -- it must do zero V2 work. Patch both bridges to raise if ever
+    # imported/called; evidence() under "off" must never reach them.
+    with patch.dict("os.environ", {"V2_MODE": "off"}):
+        try:
+            import v2.bridge as _bridge_mod
+            import v2.toto as _toto_mod
+        except ImportError:
+            # numpy/torch not installed on this host (requirements-ml.txt is optional):
+            # v2.bridge/v2.toto can't even be imported, which is itself proof that V2_MODE
+            # "off" does zero V2 work -- evidence() below must still return NOT_AVAILABLE.
+            ev_off = reasoning.evidence(candidate, {})
+            assert ev_off["forecast"] == {"patchtst": "NOT_AVAILABLE", "toto": "NOT_AVAILABLE"}
+        else:
+            with patch.object(_bridge_mod, "forecast", side_effect=AssertionError("bridge called under off")), \
+                 patch.object(_toto_mod, "validate", side_effect=AssertionError("toto called under off")):
+                ev_off = reasoning.evidence(candidate, {})
+                assert ev_off["forecast"] == {"patchtst": "NOT_AVAILABLE", "toto": "NOT_AVAILABLE"}
+    print("PASS: V2_MODE=off evidence() never touches v2.bridge/v2.toto (not just NOT_AVAILABLE by luck)")
+    # The other half: shadow mode CAN get a real Toto evidence result through evidence(),
+    # and engine.analyze() -- which imports neither reasoning nor v2 -- is untouched by it;
+    # V1 signal authority cannot be affected by code it never calls, which is structural,
+    # not merely observed. See toto_evidence_checks() below for the real worker round trip.
+    import engine
+    assert not ({"reasoning", "v2", "v2.bridge", "v2.toto"} & set(dir(engine))), \
+        "engine.py must not import reasoning/v2 -- V1 authority is structural, not a flag"
+    toto_evidence_checks(candidate)
+
+
+def toto_evidence_checks(candidate):
+    """Phase 5: toto_evidence() stays NOT_AVAILABLE off or unconfigured, and actually
+    reaches a real CONFIRM/REJECT through v2.toto.validate() + a worker subprocess once
+    V2_TOTO_WORKER_CMD and a state file are configured and the forecast is ok."""
+    import json as _json
+    import os
+    import sys
+    import tempfile
+    import shlex
+    import reasoning
+    ok_forecast = dict(status="ok", asof_ms=1, expected_return_bps=3.0, sigma_bps=10.0, p_up=0.8)
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("V2_MODE", None)
+        assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
+    with patch.dict("os.environ", {"V2_MODE": "on"}):
+        # No V2_TOTO_WORKER_CMD/V2_STATE_DIR: fails closed, no crash.
+        assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
+        assert reasoning.toto_evidence(candidate, {"status": "unavailable"}, 0) == "NOT_AVAILABLE"
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        print("PASS: toto_evidence off/unconfigured (numpy absent: worker path skipped)")
+        return
+    worker = textwrap_dedent("""
+        import json, sys
+        payload = json.load(sys.stdin)
+        print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8,
+                          "model_version": "sha256:" + "c" * 64}))
+    """)
+    import v2.resource_gate as _rg
+    real_check = _rg.check
+    # These checks exercise the Toto plumbing, not this machine's load: pin the host status to
+    # healthy so they cannot flake on a busy host. The gate's own behavior is tested in
+    # tests/test_resource_gate.py and in the pressure/invalid-config checks below.
+    with tempfile.TemporaryDirectory(prefix="toto evidence ") as d, patch.object(_rg, "check", return_value=_rg.OK):
+        script = os.path.join(d, "worker.py")
+        with open(script, "w") as f:
+            f.write(worker)
+        state_dir = os.path.join(d, "state")
+        os.makedirs(state_dir)
+        bars = [dict(v=1, feature_v=2, symbol=candidate["symbol"], session_id=1,
+                    start_ms=i * 60_000, end_ms=(i + 1) * 60_000, rows=10, complete=True,
+                    incomplete_reason=None, synced_since_seq=1, close_seq=i,
+                    open_mid="100", high_mid="101", low_mid="99", close_mid="100",
+                    close_microprice="100", mean_spread_bps="1", close_spread_bps="1",
+                    close_obi=[{"levels": 10, "value": "0.1"}], close_trade_state="active",
+                    buy_qty="1", sell_qty="1") for i in range(3)]
+        with open(os.path.join(state_dir, f"{candidate['symbol']}.json"), "w") as f:
+            _json.dump(dict(v=1, kind="bar_window", symbol=candidate["symbol"], bars=bars), f)
+        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, script])}):
+            result = reasoning.toto_evidence(candidate, ok_forecast, 0)
+            assert isinstance(result, dict) and result["status"] == "ok" and result["decision"] == "CONFIRM", result
+            assert result["model_version"] == "sha256:" + "c" * 64, result
+        # Final hardening, Finding 2: the same worker command without a model identity in its
+        # reply is never an ok Toto result -- the command is not a substitute for the model.
+        anonymous = os.path.join(d, "anonymous.py")
+        with open(anonymous, "w") as f:
+            f.write("import json, sys\njson.load(sys.stdin)\n"
+                    'print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8}))\n')
+        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, anonymous])}):
+            missing = reasoning.toto_evidence(candidate, ok_forecast, 0)
+            assert missing["status"] == "unavailable" and missing["reason"] == "model_version_missing", missing
+        # Fix 1: the same, via evidence() under "shadow" (not just "on") -- shadow mode can
+        # get a real Toto evidence result, and it only ever lands in evidence()["forecast"],
+        # which feeds nothing but Nemotron's advisory explain(); engine.analyze() cannot see
+        # it because engine.py imports neither reasoning nor v2 (checked above).
+        with patch.dict("os.environ", {"V2_MODE": "shadow", "V2_STATE_DIR": state_dir,
+                                       "V2_MODEL_DIR": "/nonexistent",
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, script])}), \
+             patch("reasoning.patchtst_forecast", return_value=ok_forecast):
+            # No real PatchTST model dir is configured anywhere in this repo (same as every
+            # other check here); patchtst_forecast is stubbed to an "ok" forecast purely to
+            # give toto_evidence() the input it requires, same as ok_forecast above.
+            ev_shadow = reasoning.evidence(candidate, {})
+            toto = ev_shadow["forecast"]["toto"]
+            assert isinstance(toto, dict) and toto["status"] == "ok" and toto["decision"] == "CONFIRM", toto
+            assert set(ev_shadow) == {"decision", "candidate", "journal", "forecast"}, \
+                "evidence() must expose nothing beyond its documented advisory fields"
+        print("PASS: shadow mode reaches a real Toto CONFIRM through evidence(), advisory fields only")
+        # A worker that fails degrades to NOT_AVAILABLE, never a crash or a fabricated CONFIRM.
+        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, "-c", "exit(1)"])}):
+            failed = reasoning.toto_evidence(candidate, ok_forecast, 0)
+            assert failed == "NOT_AVAILABLE" or failed.get("status") == "unavailable", failed
+        # Under ordinary pressure, a gate error status, or an invalid threshold, the Toto
+        # worker subprocess is never launched; the public path returns NOT_AVAILABLE.
+        configured = {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                      "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, script])}
+        never = patch("v2.workers.run", side_effect=AssertionError("Toto worker launched"))
+        for status in (_rg.PRESSURE, _rg.SEVERE, _rg.TELEMETRY_ERROR, _rg.UNSUPPORTED):
+            with patch.dict("os.environ", configured), never, \
+                    patch.object(_rg, "check", return_value=status):
+                assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
+        for name in ("V2_RESOURCE_MAX_LOAD_PER_CORE", "V2_RESOURCE_MIN_FREE_MB"):
+            for bad in ("bogus", "nan", "inf", "0"):
+                with patch.dict("os.environ", dict(configured, **{name: bad})), never, \
+                        patch.object(_rg, "check", real_check):
+                    assert _rg.check() == _rg.INVALID_CONFIG
+                    assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
+    print("PASS: toto_evidence off/unconfigured degrades to NOT_AVAILABLE; a configured worker reaches a real CONFIRM")
+
+
+def scan_checks(candidate, rules):
+    import time
+    import httpx
+    import bot
+    coins = [dict(symbol=s, group="volume", tick="0.01") for s in ("AAAUSDT", "BBBUSDT")]
+
+    def scan(env, gate=None, **post_options):
+        with patch.dict("os.environ", env), patch("bot.Binance") as api_class, patch("bot.database"), \
+                patch("bot.work_lock") as lock, patch("bot.query", return_value=[]), \
+                patch("bot.rules_from_env", return_value=rules), patch("bot.active_signals", return_value=[]), \
+                patch("bot.save_candles"), patch("bot.save_analysis"), \
+                patch("bot.analyze", side_effect=lambda symbol, *a: {**candidate, "symbol": symbol}), \
+                patch("bot.memories", return_value={"sample_count": 0, "average_net_r": None, "recent_cases": []}), \
+                patch("bot.validate_market", **(gate or {"return_value": candidate["market"]})), \
+                patch("bot.save_signal", return_value=True) as save, patch("bot.deliver") as deliver, \
+                patch("reasoning.httpx.post", **post_options) as post, patch("bot.confirm") as legacy:
+            lock.return_value.__enter__.return_value = True
+            api = api_class.return_value
+            api.now.return_value = int(time.time() * 1000)  # Exchange clock, as in production.
+            api.universe.return_value = (coins, {})
+            legacy.return_value = {"decision": "HOLD", "reason": "Model lokal ragu"}
+            summary = bot.scan.fn(force=True)
+            issued = [c.args[1] for c in save.call_args_list if c.kwargs.get("new")]
+            return summary, issued, post, deliver, legacy
+
+    import reasoning
+    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": "nvapi-x", "MAX_OPEN_SIGNALS": "3",
+           "NVIDIA_BASE_URL": reasoning.DEFAULT_URL, "NEMOTRON_MAX_RETRIES": "2",
+           "NEMOTRON_TIMEOUT_SECONDS": "30", "NEMOTRON_MAX_AGE_SECONDS": "600"}
+    summary, issued, post, deliver, legacy = scan(env, side_effect=httpx.ReadTimeout("down"))
+    assert summary["paper_signals"] == 2 and deliver.call_count == 2 and not legacy.called
+    assert post.call_count == 1  # Circuit breaker: the second candidate skips the failed provider.
+    assert [s["reasoning"]["status"] for s in issued] == ["DEGRADED", "DEGRADED"]
+    assert all(s["action"] == candidate["action"] and s["entry"] == candidate["entry"] for s in issued)
+    ok = httpx.Response(200, request=httpx.Request("POST", "https://integrate.api.nvidia.com/v1/chat/completions"),
+                        json={"model": "m", "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(dict(
+                            thesis="t", bullish_evidence=[], bearish_evidence=["Harga bisa turun"],
+                            contradictions=["15m melawan 4h"], forecast_consistency="CONFLICTING",
+                            uncertainty_summary="u", risk_summary="r", operator_explanation="e"))}}]})
+    summary, issued, post, _, _ = scan(env, return_value=ok)
+    assert summary["paper_signals"] == 2 and post.call_count == 2
+    assert all(s["reasoning"]["status"] == "OK" and s["action"] == candidate["action"] for s in issued)
+    assert all((s["entry"], s["stop"], s["target"]) == (candidate["entry"], candidate["stop"], candidate["target"])
+               for s in issued)  # Contradictions are reported, never acted on.
+    summary, issued, post, _, _ = scan(env, gate={"side_effect": ValueError("Spread terlalu lebar")})
+    assert summary["paper_signals"] == 0 and not post.called  # Risk gate failure: Nemotron is never asked.
+    summary, issued, post, _, legacy = scan({**env, "AI_PROVIDER": "ollama"})
+    assert summary["paper_signals"] == 0 and legacy.call_count == 2 and not post.called
+    expect_error(lambda: scan({**env, "AI_PROVIDER": "qwen"}))
+    print("PASS: scan issues deterministic signals during Nemotron outage, risk gate first, legacy veto flag")
 
 
 def main():
@@ -234,11 +713,51 @@ def main():
                 assert terminate.call_args.args[0] == ["taskkill.exe", "/PID", "12345", "/T", "/F"]
     with patch.dict("os.environ", {"AI_PROVIDER": "invalid"}):
         assert confirm(candidate(), {})["decision"] == "HOLD"
+    reply = {"done": True, "message": {"content": '{"decision":"CONFIRM","reason":"Bukti cukup"}'}}
+    with patch.dict("os.environ", {"AI_PROVIDER": " Ollama "}), patch("services.httpx.post") as post:
+        post.return_value.json.return_value = reply
+        assert confirm(candidate(), {})["decision"] == "CONFIRM"  # Same normalization as the scan loop.
     print("PASS: Hermes final JSON validation, failed/partial responses, missing executable, provider selection")
     with patch.dict("os.environ", {"TELEGRAM_ENABLED": "false"}), patch("services.httpx.post") as send:
         deliver(None, base)
         send.assert_not_called()
     print("PASS: AI schema and timeout fail closed; dry-run never sends Telegram")
+    nemotron_checks({**long, "market": dict(bid=120.59, ask=120.61, spread_bps=1.6,
+                                            funding_rate=0.0001, net_rr_estimate=1.8)}, rules)
+    v2_bridge_checks(long)
+    gate_checks(long, rules)
+
+    if "--nemotron-live" in sys.argv:
+        # Optional smoke test against NVIDIA's hosted API; needs NVIDIA_API_KEY in .env. Never prints the key.
+        import os
+        import httpx
+        import reasoning
+        from services import load_dotenv, ROOT
+        load_dotenv(ROOT / ".env")
+        if not os.getenv("NVIDIA_API_KEY", "").strip():
+            print("SKIP: NVIDIA_API_KEY kosong; uji live Nemotron tidak dijalankan")
+        else:
+            sizes, statuses = [], []
+            real_post, real_get = httpx.post, httpx.get
+
+            def measure(call):
+                def wrapped(*args, **kwargs):
+                    response = call(*args, **kwargs)
+                    sizes.append(len(response.content))
+                    statuses.append(response.status_code)
+                    return response
+                return wrapped
+            sample = {**long, "market": dict(bid=120.59, ask=120.61, spread_bps=1.6, funding_rate=0.0001,
+                                             net_rr_estimate=1.8)}
+            with patch.dict("os.environ", {"AI_PROVIDER": "nemotron"}), \
+                    patch("reasoning.httpx.post", measure(real_post)), patch("reasoning.httpx.get", measure(real_get)):
+                result = reasoning.explain(sample, {"sample_count": 0, "average_net_r": None, "recent_cases": []})
+            print(json.dumps({"status": result["status"], "error": result["error"], "latency_ms": result["latency_ms"],
+                              "model_version": result["model_version"], "http_statuses": statuses,
+                              "response_bytes": sizes, "requests": len(statuses),
+                              "schema_ok": result["source"] == "nemotron"}))
+            assert result["status"] == "OK", "Nemotron live gagal; lihat error di atas"
+            print("PASS: Nemotron live menghasilkan ReasoningResult yang valid")
 
     if "--hermes" in sys.argv:
         from services import hermes_confirm

@@ -1,0 +1,26 @@
+[package]
+name = "market-data"
+version = "0.1.0"
+edition = "2021"
+description = "Binance USD-M Futures public market-data ingestion, local L2 book sync, recorder and deterministic replay. No trading endpoints."
+publish = false
+
+[dependencies]
+flate2 = "1.1"
+futures-util = "0.3"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+rust_decimal = "1.43"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["raw_value"] }
+thiserror = "2.0"
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+
+[dev-dependencies]
+tempfile = "3"
+# In-process fake Binance servers for the live-loop test.
+tokio = { version = "1.53", features = ["net", "io-util"] }
+
+[[bench]]
+name = "hotpath"
+harness = false

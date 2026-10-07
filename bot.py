@@ -6,6 +6,7 @@ import os
 
 from engine import (VERSION, analyze, validate_market, new_signal, paper_update,
                     settle, signal_id)
+from reasoning import LEGACY_PROVIDERS, check_provider, explain, mark_stale, provider_name
 from services import (ROOT, LOG, Binance, active_signals, confirm, database, deliver,
                       dump, init_schema, memories, query, rules_from_env, safe_error,
                       save_analysis, save_candles, save_signal, record_outcome, work_lock)
@@ -59,6 +60,13 @@ def scan(force=False):
         with database() as db, work_lock(db) as acquired:
             if not acquired:
                 return {"state": "BUSY"}
+            provider = provider_name()
+            check_provider(provider)
+            if not os.getenv("AI_PROVIDER"):
+                # Default changed from ollama (veto) to nemotron (explain only); make that visible.
+                LOG.warning("AI_PROVIDER belum diisi; memakai nemotron (tanpa veto AI). Set ollama/hermes untuk veto legacy")
+            if provider in LEGACY_PROVIDERS:
+                LOG.warning("AI_PROVIDER=%s sudah deprecated; target arsitektur adalah nemotron", provider)
             now = api.now()
             bucket = (now // 900_000 - 1) * 900_000
             last = query(db, "SELECT value FROM bot_state WHERE name='last_scan_candle'")
@@ -95,7 +103,7 @@ def scan(force=False):
             max_open = int(os.getenv("MAX_OPEN_SIGNALS", "3"))
             if not 1 <= max_open <= 50:
                 raise ValueError("MAX_OPEN_SIGNALS harus 1–50")
-            ai_calls, issued = 0, 0
+            ai_calls, issued, reasoning_skip = 0, 0, None
             for result in sorted(candidates, key=lambda c: c["rank"], reverse=True):
                 try:
                     if result["symbol"] in busy_symbols:
@@ -105,7 +113,7 @@ def scan(force=False):
                     if query(db, "SELECT id FROM signals WHERE id=%s", (signal_id(result),)):
                         raise ValueError("Kandidat candle ini sudah pernah diterbitkan")
                     # ponytail: bound local LLM work to 5 candidates per scan; increase after measuring latency.
-                    if ai_calls >= 5:
+                    if provider in LEGACY_PROVIDERS and ai_calls >= 5:
                         raise ValueError("Batas 5 konfirmasi AI per siklus tercapai")
                     history = memories(db, result["regime"], result["version"])
                     result["journal"] = history
@@ -114,15 +122,28 @@ def scan(force=False):
                     quote = api.get("/fapi/v1/ticker/bookTicker", symbol=result["symbol"])
                     premium = api.get("/fapi/v1/premiumIndex", symbol=result["symbol"])
                     result["market"] = validate_market(result, quote, premium, api.now(), rules)
-                    result["ai"] = confirm(result, history)
-                    ai_calls += 1
-                    if result["ai"]["decision"] != "CONFIRM":
-                        raise ValueError(result["ai"]["reason"])
+                    if provider in LEGACY_PROVIDERS:
+                        # Deprecated: the legacy local model can veto a candidate.
+                        result["ai"] = confirm(result, history)
+                        ai_calls += 1
+                        if result["ai"]["decision"] != "CONFIRM":
+                            raise ValueError(result["ai"]["reason"])
+                    else:
+                        # Nemotron explains a decision the deterministic gates already made; it never vetoes.
+                        skip = reasoning_skip or ("Batas 5 penjelasan per siklus tercapai" if ai_calls >= 5 else None)
+                        result["reasoning"] = explain(result, history, skip)
+                        if not skip:
+                            ai_calls += 1
+                            if result["reasoning"]["status"] == "DEGRADED":
+                                # One outage costs one timeout per scan, not one per candidate.
+                                reasoning_skip = "Nemotron dilewati setelah kegagalan pada siklus ini"
                     quote = api.get("/fapi/v1/ticker/bookTicker", symbol=result["symbol"])
                     premium = api.get("/fapi/v1/premiumIndex", symbol=result["symbol"])
                     fresh_now = api.now()
                     result["market"] = validate_market(result, quote, premium, fresh_now, rules)
                     signal = new_signal(result, fresh_now, rules)
+                    if "reasoning" in signal:
+                        signal["reasoning"] = mark_stale(signal["reasoning"], signal, fresh_now)
                     if save_signal(db, signal, new=True):
                         issued += 1
                         busy_symbols.add(signal["symbol"])
