@@ -74,9 +74,9 @@ Computed in `market-data/src/features.rs` inside the one `Pipeline` that both li
 
 **Bounds.** Each window keeps a running sum over one shared deque per symbol, so a trade or clock step costs amortized O(windows). The deque holds at most 100 000 trades; when it overflows, windows that still needed the evicted trades report `null` until they are covered again. OBI costs O(max N) per row. Measured on a synthetic stream in release mode: about 490 000 events/s including JSON parsing (`cargo test --release --test features -- --ignored`).
 
-**Output.** `--features-out` writes to `<file>.partial` and renames it only when the run ends cleanly; it never overwrites. The live recorder writes the feature config into the `session_start` detail so a replay can be checked against it (replay does not enforce it).
+**Output, integrity, staleness.** Frozen in [feature-schema.md](feature-schema.md) (schema v2): rotated gzip storage with a file cap, the feature config recorded in `session_start` and enforced by replay, and `trade_state` so a stalled trade stream withholds CVD instead of reporting zeros.
 
-**Known limits.** A silent aggTrade stream while depth keeps flowing is indistinguishable from no trades; `last_trade_ms` lets a consumer judge that. Features are not yet consumed by Python (Phase 4).
+**Known limits.** Trade silence thresholds are a policy, not proof of a stall. Features are not yet consumed by Python (Phase 4).
 
 ## Current Nemotron evidence
 

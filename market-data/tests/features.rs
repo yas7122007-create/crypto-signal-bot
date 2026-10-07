@@ -373,6 +373,38 @@ fn replay_detects_feature_config_mismatch() {
     }
 }
 
+/// docs/feature-schema.md is the frozen contract: its field table must list exactly the
+/// serialized fields, and its version must match the code.
+#[test]
+fn schema_doc_matches_serialized_fields() {
+    let doc = std::fs::read_to_string("../docs/feature-schema.md").unwrap();
+    let table = doc
+        .split("## Fields")
+        .nth(1)
+        .unwrap()
+        .split("\n## ")
+        .next()
+        .unwrap();
+    let mut documented: Vec<&str> = table
+        .lines()
+        .filter_map(|l| l.strip_prefix("| `"))
+        .filter_map(|l| l.split('`').next())
+        .collect();
+    let row = serde_json::to_value(&run(session())[0]).unwrap();
+    let mut fields: Vec<&str> = row
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    documented.sort_unstable();
+    fields.sort_unstable();
+    assert_eq!(documented, fields);
+    let version = market_data::features::FEATURE_SCHEMA_VERSION;
+    assert!(doc.contains(&format!("schema v{version}")));
+    assert_eq!(row["v"], version);
+}
+
 /// The committed file pins the full serialized format, not just the hand-checked values.
 /// Regenerate with `UPDATE_GOLDEN=1 cargo test` and review the diff.
 #[test]

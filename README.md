@@ -176,15 +176,22 @@ cargo run --release -- replay --input ../recordings --audit
 - Rekaman: `events-<waktu>-<seq>.ndjson.gz`, rotasi per jam atau 512 MB, flush tiap detik. Setelah crash, replay membaca hingga flush terakhir dan melaporkan file terpotong; baris rusak di tengah file menghentikan replay.
 - Uji: `cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test` (offline, tanpa akses Binance; uji live-loop memakai server palsu di 127.0.0.1, bukan Binance).
 
-### Fitur order-flow (Phase 2)
+### Fitur order-flow (Phase 2 + 2.5)
 
 ```bash
-cargo run --release -- record --symbols BTCUSDT --out ../recordings --features-out ../features-live.ndjson
-cargo run --release -- replay --input ../recordings --features-out ../features-replay.ndjson
-# Opsional: --cvd-windows-ms 1000,5000,15000,60000 --obi-levels 10,50 (nilai default)
+cargo run --release -- record --symbols BTCUSDT --out ../recordings --features-dir ../features-live
+cargo run --release -- replay --input ../recordings --features-dir ../features-replay
+# Opsional (nilai default): --cvd-windows-ms 1000,5000,15000,60000 --obi-levels 10,50
+#   --trade-quiet-ms 10000 --trade-stale-ms 120000 --features-rotate-mb 256 --features-max-files 64
 ```
 
-Satu baris fitur dikeluarkan setelah setiap event depth yang membuat book tersinkron: mid, spread, spread (bps), microprice, OBI top-N, CVD epoch, dan delta CVD per jendela, beserta `seq`, `book_update_id` dan `synced_since_seq` untuk audit. Replay dari rekaman yang sama menghasilkan file fitur yang identik byte demi byte. Nilai yang tidak bisa dihitung dari data yang tepercaya ditulis `null`, bukan ditebak. Definisi lengkap ada di [docs/architecture-v2.md](docs/architecture-v2.md#phase-2-order-flow-features). File fitur tidak dirotasi; aktifkan hanya untuk run evaluasi yang terbatas.
+Satu baris fitur dikeluarkan setelah setiap event depth yang membuat book tersinkron. Kontrak lengkap (schema v2: arti field, timestamp, nilai `null`, epoch CVD, kedalaman OBI, status stream trade) ada di [docs/feature-schema.md](docs/feature-schema.md). Ringkasnya:
+
+- Replay dari rekaman yang sama menghasilkan baris fitur yang identik byte demi byte. Konfigurasi fitur ikut tercatat di `session_start`; `replay` menolak rekaman dengan konfigurasi berbeda kecuali diberi `--allow-config-mismatch`.
+- `trade_state` membedakan `active`, `quiet` (pasar sepi yang wajar) dan `stale` (trade diam terlalu lama sementara depth tetap mengalir); saat `stale`, CVD dan delta tidak dilaporkan (`null`), bukan diisi nol.
+- File fitur berupa gzip NDJSON yang dirotasi, dengan batas jumlah file per run; file yang sedang ditulis berakhiran `.partial`.
+
+Uji asap dengan Binance asli (data publik saja): `scripts/binance-smoke.sh 300 BTCUSDT`. Jika jaringan atau proxy memblokir Binance, skrip gagal dengan kode 3; TLS tidak pernah dilemahkan.
 
 Layanan ini belum terhubung ke bot Python; antarmuka Python/Rust adalah Fase 4.
 
