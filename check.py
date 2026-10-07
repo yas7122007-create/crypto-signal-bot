@@ -388,6 +388,7 @@ def toto_evidence_checks(candidate):
     import os
     import sys
     import tempfile
+    import shlex
     import reasoning
     ok_forecast = dict(status="ok", asof_ms=1, expected_return_bps=3.0, sigma_bps=10.0, p_up=0.8)
     with patch.dict("os.environ", {}, clear=False):
@@ -413,7 +414,7 @@ def toto_evidence_checks(candidate):
     # These checks exercise the Toto plumbing, not this machine's load: pin the host status to
     # healthy so they cannot flake on a busy host. The gate's own behavior is tested in
     # tests/test_resource_gate.py and in the pressure/invalid-config checks below.
-    with tempfile.TemporaryDirectory() as d, patch.object(_rg, "check", return_value=_rg.OK):
+    with tempfile.TemporaryDirectory(prefix="toto evidence ") as d, patch.object(_rg, "check", return_value=_rg.OK):
         script = os.path.join(d, "worker.py")
         with open(script, "w") as f:
             f.write(worker)
@@ -429,7 +430,7 @@ def toto_evidence_checks(candidate):
         with open(os.path.join(state_dir, f"{candidate['symbol']}.json"), "w") as f:
             _json.dump(dict(v=1, kind="bar_window", symbol=candidate["symbol"], bars=bars), f)
         with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
-                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}):
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, script])}):
             result = reasoning.toto_evidence(candidate, ok_forecast, 0)
             assert isinstance(result, dict) and result["status"] == "ok" and result["decision"] == "CONFIRM", result
             assert result["model_version"] == "sha256:" + "c" * 64, result
@@ -440,7 +441,7 @@ def toto_evidence_checks(candidate):
             f.write("import json, sys\njson.load(sys.stdin)\n"
                     'print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8}))\n')
         with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
-                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} {anonymous}"}):
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, anonymous])}):
             missing = reasoning.toto_evidence(candidate, ok_forecast, 0)
             assert missing["status"] == "unavailable" and missing["reason"] == "model_version_missing", missing
         # Fix 1: the same, via evidence() under "shadow" (not just "on") -- shadow mode can
@@ -449,7 +450,7 @@ def toto_evidence_checks(candidate):
         # it because engine.py imports neither reasoning nor v2 (checked above).
         with patch.dict("os.environ", {"V2_MODE": "shadow", "V2_STATE_DIR": state_dir,
                                        "V2_MODEL_DIR": "/nonexistent",
-                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}), \
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, script])}), \
              patch("reasoning.patchtst_forecast", return_value=ok_forecast):
             # No real PatchTST model dir is configured anywhere in this repo (same as every
             # other check here); patchtst_forecast is stubbed to an "ok" forecast purely to
@@ -462,13 +463,13 @@ def toto_evidence_checks(candidate):
         print("PASS: shadow mode reaches a real Toto CONFIRM through evidence(), advisory fields only")
         # A worker that fails degrades to NOT_AVAILABLE, never a crash or a fabricated CONFIRM.
         with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
-                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} -c exit(1)"}):
+                                       "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, "-c", "exit(1)"])}):
             failed = reasoning.toto_evidence(candidate, ok_forecast, 0)
             assert failed == "NOT_AVAILABLE" or failed.get("status") == "unavailable", failed
         # Under ordinary pressure, a gate error status, or an invalid threshold, the Toto
         # worker subprocess is never launched; the public path returns NOT_AVAILABLE.
         configured = {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
-                      "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}
+                      "V2_TOTO_WORKER_CMD": shlex.join([sys.executable, script])}
         never = patch("v2.workers.run", side_effect=AssertionError("Toto worker launched"))
         for status in (_rg.PRESSURE, _rg.SEVERE, _rg.TELEMETRY_ERROR, _rg.UNSUPPORTED):
             with patch.dict("os.environ", configured), never, \

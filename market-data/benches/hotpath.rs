@@ -1,9 +1,10 @@
 //! Hot-path profile of the market-data engine on a realistic, deterministic synthetic
 //! stream. Developer tool only (`cargo bench --bench hotpath`); not part of the library.
 //!
-//! Each stage is measured two ways: a batch run without per-call timers (throughput,
+//! Most stages are measured two ways: a batch run without per-call timers (throughput,
 //! ns/op) and a per-call run (p50/p95/p99, which include about one timer read of overhead,
-//! reported as `timer`). Allocations are counted by a wrapper around the system allocator
+//! reported as `timer`). Individual pipeline event means use the per-call samples too.
+//! Allocations are counted by a wrapper around the system allocator
 //! that lives only in this bench binary.
 //!
 //! The stream: one symbol, a 1000-level snapshot per side at a 0.10 tick, then depth diffs
@@ -63,10 +64,17 @@ const MID_TICKS: i64 = 500_000; // 50 000.0 at a 0.1 tick
 
 /// Number of depth diffs (`HOTPATH_DIFFS`, default 100 000); smaller for profilers.
 fn diffs() -> u64 {
-    std::env::var("HOTPATH_DIFFS")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(100_000)
+    let n = match std::env::var("HOTPATH_DIFFS") {
+        Ok(value) => value.parse().unwrap_or(0),
+        Err(std::env::VarError::NotPresent) => 100_000,
+        Err(_) => 0,
+    };
+    // The stream starts 20 seconds into a minute; diff 401 closes its first bar.
+    if n < 401 {
+        eprintln!("HOTPATH_DIFFS must be an integer >= 401 to produce a closed minute bar");
+        std::process::exit(2);
+    }
+    n
 }
 
 /// xorshift64*: deterministic, dependency-free.
@@ -263,7 +271,7 @@ fn measure<T>(
 
 fn print(stats: &[Stat]) {
     println!(
-        "| stage | n | ns/op (batch) | ops/s | p50 ns | p95 ns | p99 ns | allocs/op | bytes/op |"
+        "| stage | n | mean ns/op | ops/s | p50 ns | p95 ns | p99 ns | allocs/op | bytes/op |"
     );
     println!("|---|---|---|---|---|---|---|---|---|");
     for s in stats {
@@ -629,7 +637,11 @@ fn main() {
         }));
     }
     let state_dir = dir_path.as_path().join("state");
-    let mut state = BarState::create(&state_dir, 256).unwrap();
+    // Identical warm-up and inputs for both passes; neither pass rewinds the other.
+    let mut states = [
+        BarState::create(&state_dir, 256).unwrap(),
+        BarState::create(&dir_path.join("state2"), 256).unwrap(),
+    ];
     // Warm to a full 256-bar window by repeating the bars with shifted times.
     let mut window_bars = Vec::new();
     for i in 0..300i64 {
@@ -638,17 +650,24 @@ fn main() {
         b.end_ms = b.start_ms + 60_000;
         window_bars.push(b);
     }
-    for b in &window_bars[..256] {
-        state.update(b).unwrap();
+    for state in &mut states {
+        for b in &window_bars[..256] {
+            state.update(b).unwrap();
+        }
     }
     let state_bytes = std::fs::metadata(state_dir.join("BTCUSDT.json"))
         .unwrap()
         .len();
+    let mut calls = 0usize;
     stats.push(measure(
         "state file write (256 bars, fsync)",
         &window_bars[256..],
         Some(state_bytes as f64),
-        |b| state.update(b).unwrap(),
+        |b| {
+            let which = usize::from(calls >= window_bars.len() - 256);
+            calls += 1;
+            states[which].update(b).unwrap();
+        },
     ));
     // Breakdown of the state write: building the JSON vs putting bytes on disk.
     {
@@ -698,6 +717,7 @@ fn main() {
         envs.len()
     );
     println!("timer overhead p50: {timer} ns (included in per-call percentiles)\n");
+    println!("Individual pipeline event means include per-call timer overhead; other means use batch timings.\n");
     print(&stats);
     println!(
         "\nrecording: {gz} bytes gzip for {} events ({:.1} B/event); state file {state_bytes} bytes",

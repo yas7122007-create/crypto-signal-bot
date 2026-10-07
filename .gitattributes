@@ -1,0 +1,2 @@
+*.sh text eol=lf
+*.ndjson text eol=lf

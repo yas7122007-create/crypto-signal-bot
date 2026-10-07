@@ -51,11 +51,11 @@ class WorkerRunner(unittest.TestCase):
             payload = json.load(sys.stdin)
             print(json.dumps({"echo": payload["x"]}))
         """)
-        with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:
-            f.write(script)
-            path = f.name
-        out = W.run([sys.executable, path], {"x": 42}, timeout_s=10)
-        self.assertEqual(out, {"echo": 42})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "worker.py"
+            path.write_text(script)
+            out = W.run([sys.executable, str(path)], {"x": 42}, timeout_s=10)
+            self.assertEqual(out, {"echo": 42})
 
     def test_timeout_nonzero_exit_and_bad_json_all_raise(self):
         sleepy = [sys.executable, "-c", "import time; time.sleep(5)"]

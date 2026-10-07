@@ -84,7 +84,7 @@ class TelemetryErrorFailsClosed(unittest.TestCase):
     def test_unexpected_load_measurement_exception(self):
         for exc in (OSError("load unobtainable"), RuntimeError("boom"), ZeroDivisionError()):
             with self.subTest(exc=exc), patch.object(RG, "_linux", return_value=True), \
-                    patch("os.getloadavg", side_effect=exc), \
+                    patch("os.getloadavg", side_effect=exc, create=True), \
                     patch.object(RG, "_free_mb", return_value=64_000.0):
                 self.assert_blocked()
 
