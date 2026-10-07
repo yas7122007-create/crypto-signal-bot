@@ -257,3 +257,50 @@ Telegram's 70%-style threshold, if ever added, must read `historical_hit_rate`, 
 `model_confidence` -- the two are not interchangeable, and this module keeps them as
 separate, separately-documented fields precisely so a future change cannot blur them
 without touching this file's tests.
+
+## Phase 7: paper evaluation (`v2/evaluate.py`)
+
+An append-only NDJSON journal, deliberately decoupled from the live bot's MySQL
+`signals`/`outcomes` tables: `record_decision()` writes one `decision.v1` row per candidate
+the engine reached a final action on (what it proposed, what V2 actually did, and why, plus
+whatever `forecast`/`toto`/`gate` evidence was attached), and `record_outcome()` writes one
+`outcome.v1` row per signal `engine.settle()` closed. `load()` is strict: a malformed line
+raises `JournalError` naming the file and line rather than being silently skipped, since a
+report is only as trustworthy as the journal behind it.
+
+`build_report(decisions, outcomes)` answers the brief's own questions:
+
+- `counts` (LONG/SHORT/HOLD), `precision_by_direction` (fraction of closed trades with
+  `net_r > 0`, per direction and overall), `average_net_r`, `positive_fraction`.
+- `expectancy`: the classic `win_rate*avg_win - loss_rate*avg_loss`. Computed this way
+  rather than assumed equal to `average_net_r` -- and documented as algebraically identical
+  to it over the same population, since every trade counts on exactly one side. Both are
+  reported because the brief asks for both by name, not because they can differ here.
+- `max_drawdown`: largest peak-to-trough drop in cumulative `net_r` over outcome order
+  (`exit_ms`); `0.0`, never `None`, when equity never fell.
+- `rejection_reasons`: counts of why a proposed LONG/SHORT became HOLD -- this is how "did
+  Nemotron/Toto reject a good or a bad candidate" gets answered, by joining against
+  `outcome.v1` rows for candidates that were *not* held (a held candidate has no outcome to
+  check against by construction, so answering "would it have won" needs a separate shadow
+  run that still issues paper signals even when V2 would reject -- not built here, since it
+  would mean changing `bot.scan()`'s gating, which Phase 6 already flagged as the project
+  owner's decision).
+- `provider_failures`: Toto/Nemotron being *unavailable*, kept separate from a real
+  REJECT/HOLD opinion.
+- `stale_rejections`: forecasts held specifically for `reason: "stale_input"`.
+- `forecast_quality`: PatchTST's forecast against the realized return, reusing
+  `v2.metrics.evaluate()` -- the identical scoring Phase 3's offline baselines use, so a
+  live forecast is judged the same way.
+
+`python -m v2.evaluate --decisions D.ndjson --outcomes O.ndjson [--out report.json]` runs
+this over two journal files (missing files are treated as empty, so a report can be built
+before any data exists). `tests/test_evaluate.py` covers the journal round trip, every
+metric on hand-computed values, and the CLI, including on a known equity curve for
+`max_drawdown` and a known forecast/outcome pair for `forecast_quality`.
+
+**Not wired into `bot.scan()`** for the same reason Phase 6 is not: nothing calls
+`record_decision`/`record_outcome` from the live scan loop yet. Wiring it in is mechanical
+(call `record_decision` where `bot.scan()` already sets `result["action"] = "HOLD"` on
+rejection, and `record_outcome` where `settle()` is called during evaluation) but is left
+for whoever adopts the Phase 6 ranking layer, at the same time, since the two share the
+`v2_mode`/evidence fields.

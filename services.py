@@ -163,6 +163,7 @@ def memories(db, regime, version):
     samples = [json.loads(r["payload"]) for r in rows]
     return {"sample_count": len(samples),
             "average_net_r": sum(s["net_r"] for s in samples) / len(samples) if samples else None,
+            "positive_fraction": sum(s["net_r"] > 0 for s in samples) / len(samples) if samples else None,
             "recent_cases": [{k: s[k] for k in ("symbol", "outcome", "net_r", "reason")} for s in samples[:5]]}
 
 
