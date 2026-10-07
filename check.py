@@ -231,6 +231,39 @@ def nemotron_checks(candidate, rules):
     scan_checks(candidate, rules)
 
 
+def v2_bridge_checks(candidate):
+    """Phase 4: V2_MODE defaults to off (today's exact behavior); shadow/on call the bridge,
+    and any bridge failure degrades to NOT_AVAILABLE rather than raising into Nemotron."""
+    import os
+    import reasoning
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("V2_MODE", None)
+        assert reasoning.v2_mode() == "off"
+        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+    with patch.dict("os.environ", {"V2_MODE": "qwen"}):
+        expect_error(reasoning.v2_mode)
+    with patch.dict("os.environ", {"V2_MODE": "on"}):
+        # No V2_STATE_DIR/V2_MODEL_DIR configured: fails closed, no crash.
+        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+    with patch.dict("os.environ", {"V2_MODE": "shadow", "V2_STATE_DIR": "/nonexistent",
+                                   "V2_MODEL_DIR": "/nonexistent"}):
+        # With dirs configured but numpy/torch not installed (requirements-ml.txt is
+        # optional): the import itself fails, and that must degrade too, not raise.
+        result = reasoning.patchtst_forecast(candidate, 0)
+        assert result == "NOT_AVAILABLE" or result.get("status") == "unavailable"
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            pass
+        else:
+            # numpy (and maybe torch) present: exercise a bridge call that raises too.
+            with patch("v2.bridge.forecast", side_effect=RuntimeError("boom")):
+                assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+    ev = reasoning.evidence(candidate, {})
+    assert ev["forecast"]["toto"] == "NOT_AVAILABLE"
+    print("PASS: V2_MODE off/shadow/on, invalid mode rejected, bridge failures degrade to NOT_AVAILABLE")
+
+
 def scan_checks(candidate, rules):
     import time
     import httpx
@@ -471,6 +504,7 @@ def main():
     print("PASS: AI schema and timeout fail closed; dry-run never sends Telegram")
     nemotron_checks({**long, "market": dict(bid=120.59, ask=120.61, spread_bps=1.6,
                                             funding_rate=0.0001, net_rr_estimate=1.8)}, rules)
+    v2_bridge_checks(long)
 
     if "--nemotron-live" in sys.argv:
         # Optional smoke test against NVIDIA's hosted API; needs NVIDIA_API_KEY in .env. Never prints the key.

@@ -110,3 +110,40 @@ No live loop, no Binance calls, no order placement, no claim that any market rel
 PatchTST finds in real data would hold. Phase 4 defines how (and whether) a forecast from
 this module reaches the existing Python engine, with fail-closed validation of everything
 in the contract above.
+
+## Phase 4: the Python integration boundary (`v2/bridge.py`)
+
+`v2.bridge.forecast(state_path, symbol, horizon_ms, config, now_ms=None)` turns a
+`--state-dir` bar-window file (docs/bar-schema.md) into a validated `forecast.v1` object, or
+an `unavailable` one with a specific `reason`. It never raises into its caller for bad input;
+only programmer errors (a wrong `BridgeConfig`) raise. Checks, in order: model present and
+loadable (`model_unavailable`) -> requested horizon matches the model's trained horizon
+(`horizon_mismatch`) -> state file readable, schema-valid, and one contiguous session
+(`state_unreadable`) -> state's symbol matches the request (`symbol_mismatch`) -> state not
+older than `BridgeConfig.max_stale_ms` (default 180 s, `stale_input`) -> enough bars for the
+model's window (`insufficient_history`) -> the window itself has no missing OBI/flow
+(`incomplete_window`) -> the model's own output is finite with positive sigma
+(`model_output_invalid`). `tests/test_bridge.py` has one test per branch, including with a
+real trained model.
+
+### Wiring into the existing engine (`reasoning.py`)
+
+`reasoning.evidence()` (used by Nemotron's explanation step; see Phase 5B) gained a
+`patchtst_forecast()` call gated by `V2_MODE` (env var, default `off`):
+
+- `off` (the default): `evidence()["forecast"]["patchtst"]` is exactly `"NOT_AVAILABLE"`,
+  identical to Phase 2's behavior. `check.py` passes unchanged; nothing in `engine.py` or the
+  deterministic decision changed.
+- `shadow` / `on`: if `V2_STATE_DIR` and `V2_MODEL_DIR` are set, calls the bridge above for
+  `candidate["symbol"]` with `V2_HORIZON_MS` (default 900000) and `V2_MAX_STALE_MS` (default
+  180000). Any exception, including numpy/torch not being installed (`requirements-ml.txt`
+  is optional), is caught and logged, never raised into Nemotron; the result is
+  `"NOT_AVAILABLE"` or a `forecast.v1` dict.
+
+This is wiring only: the deterministic engine (`engine.analyze`) is untouched, and Nemotron
+still cannot change the action (Phase 5B keeps that true by construction). `shadow`/`on`
+reaching an actual decision is Phase 6's job (ranking/gating); until then this only changes
+what Nemotron is shown, and Nemotron is advisory. `check.py`'s new
+`v2_bridge_checks()` covers `V2_MODE` validation and that every failure mode degrades to
+`"NOT_AVAILABLE"` rather than crashing the scan loop, on hosts with and without the ML
+extras installed.

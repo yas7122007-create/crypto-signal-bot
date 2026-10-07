@@ -48,14 +48,50 @@ def bounded(env, default, low, high, kind=float):
     return value
 
 
-def evidence(candidate, history):
+def v2_mode():
+    mode = os.getenv("V2_MODE", "off").strip().lower()
+    if mode not in ("off", "shadow", "on"):
+        raise ValueError("V2_MODE harus off, shadow, atau on")
+    return mode
+
+
+def patchtst_forecast(candidate, now_ms):
+    """Phase 4 bridge call, gated by V2_MODE (default "off" = todays exact behavior).
+    Fails closed to the "NOT_AVAILABLE" string on anything but a validated forecast.v1
+    object: no network call, and a missing model or stale/malformed state never raises
+    here, so Nemotron's explanation (and, with V2_MODE=off, the deterministic engine) is
+    never affected by this being unimplemented, untrained, or broken on this host."""
+    if v2_mode() == "off":
+        return "NOT_AVAILABLE"
+    state_dir = os.getenv("V2_STATE_DIR", "").strip()
+    model_dir = os.getenv("V2_MODEL_DIR", "").strip()
+    if not state_dir or not model_dir:
+        return "NOT_AVAILABLE"
+    try:
+        from v2 import bridge as v2_bridge
+    except ImportError:
+        return "NOT_AVAILABLE"  # numpy/torch not installed on this host.
+    try:
+        config = v2_bridge.BridgeConfig(
+            model_dir=model_dir, max_stale_ms=int(bounded("V2_MAX_STALE_MS", "180000", 1000, 3_600_000)))
+        horizon_ms = int(bounded("V2_HORIZON_MS", "900000", 60_000, 24 * 3_600_000))
+        path = os.path.join(state_dir, f"{candidate['symbol']}.json")
+        return v2_bridge.forecast(path, candidate["symbol"], horizon_ms, config, now_ms=now_ms)
+    except Exception as exc:  # Any bridge failure is NOT_AVAILABLE, never a crash or a value.
+        LOG.warning("v2 patchtst bridge gagal: %s", safe_error(exc))
+        return "NOT_AVAILABLE"
+
+
+def evidence(candidate, history, now_ms=None):
     keys = ("symbol", "action", "setup", "regime", "universe_group", "candle_ms", "entry", "stop",
             "target", "atr", "reason", "features", "market", "rules", "version")
+    forecast = patchtst_forecast(candidate, now_ms if now_ms is not None else int(time.time() * 1000))
     return {"decision": "PASSED_DETERMINISTIC_GATES",
             "candidate": {k: candidate[k] for k in keys if k in candidate},
             "journal": history,
-            # ponytail: PatchTST/Toto do not exist yet; fill these when those phases land.
-            "forecast": {"patchtst": "NOT_AVAILABLE", "toto": "NOT_AVAILABLE"}}
+            # V2_MODE=off (default): unchanged from V1. shadow/on: Phase 4 bridge result.
+            # Toto (Phase 5) is still NOT_AVAILABLE until that phase lands.
+            "forecast": {"patchtst": forecast, "toto": "NOT_AVAILABLE"}}
 
 
 def parse_result(text):
