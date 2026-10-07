@@ -55,6 +55,20 @@ class ReadState(unittest.TestCase):
             with self.assertRaises(BR.BridgeError):
                 BR.read_state(p)
 
+    def test_rejects_bars_whose_own_symbol_does_not_match_the_state_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "s.json"
+            # Every bar is internally consistent (all ETHUSDT), but the state file claims
+            # BTCUSDT at the top level: adjacent-bar-only checks would miss this.
+            state_file(p, "BTCUSDT", raw_bars(5, symbol="ETHUSDT"))
+            with self.assertRaises(BR.BridgeError):
+                BR.read_state(p)
+            # A mix of symbols across bars is caught the same way.
+            mixed = raw_bars(3, symbol="BTCUSDT") + raw_bars(3, symbol="ETHUSDT")
+            state_file(p, "BTCUSDT", mixed)
+            with self.assertRaises(BR.BridgeError):
+                BR.read_state(p)
+
 
 @unittest.skipIf(np is None, "numpy not installed")
 class FailClosed(unittest.TestCase):
@@ -138,9 +152,11 @@ class WithRealModel(unittest.TestCase):
 
     def test_symbol_mismatch_is_rejected(self):
         with tempfile.TemporaryDirectory() as d:
-            bars = self.raw[-20:]
-            p = self.state(d, bars, symbol="ETHUSDT")
-            result = BR.forecast(p, "BTCUSDT", 3 * BAR_MS, self.config, now_ms=self.now(bars))
+            # A self-consistent ETHUSDT state file (every bar genuinely ETHUSDT), requested
+            # as BTCUSDT: the mismatch is between the request and the file, not within it.
+            eth_bars = raw_bars(20, symbol="ETHUSDT", seed=2)
+            p = self.state(d, eth_bars, symbol="ETHUSDT")
+            result = BR.forecast(p, "BTCUSDT", 3 * BAR_MS, self.config, now_ms=self.now(eth_bars))
             self.assertEqual(result["reason"], "symbol_mismatch")
 
     def test_stale_input_is_rejected(self):
@@ -173,6 +189,59 @@ class WithRealModel(unittest.TestCase):
             p.write_text("{not json")
             result = BR.forecast(p, "BTCUSDT", 3 * BAR_MS, self.config)
             self.assertEqual(result["reason"], "state_unreadable")
+
+    def test_future_dated_state_is_rejected(self):
+        with tempfile.TemporaryDirectory() as d:
+            bars = self.raw[-20:]
+            p = self.state(d, bars)
+            future_now = self.now(bars) - BR.MAX_FUTURE_SKEW_MS - 1
+            result = BR.forecast(p, "BTCUSDT", 3 * BAR_MS, self.config, now_ms=future_now)
+            self.assertEqual(result["reason"], "future_input")
+
+    def test_small_clock_skew_within_tolerance_is_accepted(self):
+        with tempfile.TemporaryDirectory() as d:
+            bars = self.raw[-20:]
+            p = self.state(d, bars)
+            just_inside = self.now(bars) - BR.MAX_FUTURE_SKEW_MS + 1
+            result = BR.forecast(p, "BTCUSDT", 3 * BAR_MS, self.config, now_ms=just_inside)
+            self.assertEqual(result["status"], "ok")
+
+    def test_corrupt_model_artifact_never_raises(self):
+        """Hardening 7: a model directory whose weights.pt is not valid torch data must
+        become model_unavailable, not an exception escaping the public bridge boundary."""
+        import hashlib
+        with tempfile.TemporaryDirectory() as corrupt_dir:
+            weights = b"not a valid torch checkpoint " + b"x" * 64
+            meta = json.dumps(dict(self.model.metadata()), sort_keys=True, indent=1).encode()
+            version = hashlib.sha256(hashlib.sha256(weights).digest()
+                                     + hashlib.sha256(meta).digest()).hexdigest()[:16]
+            Path(corrupt_dir, "weights.pt").write_bytes(weights)
+            Path(corrupt_dir, "model.json").write_bytes(meta)
+            Path(corrupt_dir, "VERSION").write_text(version + "\n")
+            config = BR.BridgeConfig(model_dir=corrupt_dir)
+            BR._MODEL_CACHE.clear()
+            with tempfile.TemporaryDirectory() as d:
+                bars = self.raw[-20:]
+                p = self.state(d, bars)
+                result = BR.forecast(p, "BTCUSDT", 3 * BAR_MS, config, now_ms=self.now(bars))
+                self.assertEqual(result["status"], "unavailable")
+                self.assertEqual(result["reason"], "model_unavailable")
+                # A second call does not raise either (the failure is not cached, but still
+                # degrades cleanly on retry rather than, say, caching a half-constructed
+                # object).
+                result = BR.forecast(self.state(d, bars), "BTCUSDT", 3 * BAR_MS, config,
+                                     now_ms=self.now(bars))
+                self.assertEqual(result["status"], "unavailable")
+
+    def test_missing_model_file_never_raises(self):
+        with tempfile.TemporaryDirectory() as empty_dir:
+            config = BR.BridgeConfig(model_dir=empty_dir)
+            BR._MODEL_CACHE.clear()
+            with tempfile.TemporaryDirectory() as d:
+                bars = self.raw[-20:]
+                p = self.state(d, bars)
+                result = BR.forecast(p, "BTCUSDT", 3 * BAR_MS, config, now_ms=self.now(bars))
+                self.assertEqual(result["reason"], "model_unavailable")
 
 
 if __name__ == "__main__":

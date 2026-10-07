@@ -11,6 +11,7 @@ Nothing here calls Binance, places orders, or writes files.
 """
 from dataclasses import dataclass
 import json
+import logging
 import math
 from pathlib import Path
 import time
@@ -19,7 +20,14 @@ from v2 import contracts as C
 from v2.bars import BAR_MS, BarError, validate
 from v2.dataset import DatasetSpec, window_matrix
 
+LOG = logging.getLogger("signalbot")  # Same logger name as services.py; no import of it,
+# so v2/ stays usable without the bot's own dependencies (httpx, pymysql, ...).
+
 DEFAULT_MAX_STALE_MS = 180_000  # 3 bars: a live state file older than this is not "now".
+# A state file timestamped after "now" cannot be real: either the state writer's clock is
+# wrong, or the file is fabricated/replayed. A small tolerance absorbs ordinary clock skew
+# between the Rust recorder's host and this process without opening a window for either.
+MAX_FUTURE_SKEW_MS = 5_000
 _MODEL_CACHE = {}
 
 
@@ -47,7 +55,14 @@ def _load_model(model_dir):
         return None  # Not cached either: a future call in the same process still checks.
     try:
         model = Forecaster.load(model_dir)
-    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+    except Exception as exc:
+        # Trust-boundary safety net (Hardening 7): a corrupt or mid-write model artifact
+        # must become "unavailable", not an exception that reaches the live caller. This is
+        # deliberately broad -- torch.load on bad bytes can raise pickle.UnpicklingError,
+        # RuntimeError, EOFError, zipfile.BadZipFile, or others that are not enumerable in
+        # advance -- but it only wraps model deserialization, not the rest of the bridge:
+        # every other function below still raises its own specific, catchable errors.
+        LOG.warning("v2 patchtst model load failed (%s): %s", type(exc).__name__, model_dir)
         return None
     _MODEL_CACHE[key] = model
     return model
@@ -78,9 +93,16 @@ def read_state(path):
         validated = [validate(b) for b in bars]
     except BarError as exc:
         raise BridgeError(f"invalid bar: {exc}") from None
+    # Every bar must actually be this symbol's own data: checking only adjacent bars against
+    # each other (below) would accept a state file whose *every* bar is uniformly mislabeled
+    # -- e.g. a top-level "symbol": "BTCUSDT" over bars that are all really ETHUSDT -- since
+    # such bars are internally consistent with each other. The top-level field is the one
+    # being claimed; each bar's own field is the one actually used to compute anything, so
+    # both must agree, for every bar, not just checked once.
+    if any(b["symbol"] != symbol for b in validated):
+        raise BridgeError("a bar's symbol does not match the state file's own symbol")
     for a, b in zip(validated, validated[1:]):
-        if b["start_ms"] - a["start_ms"] != BAR_MS or a["symbol"] != b["symbol"] \
-                or a["session_id"] != b["session_id"]:
+        if b["start_ms"] - a["start_ms"] != BAR_MS or a["session_id"] != b["session_id"]:
             raise BridgeError("state file bars are not one contiguous session")
     return symbol, validated
 
@@ -106,6 +128,8 @@ def forecast(state_path, symbol, horizon_ms, config, now_ms=None):
     if state_symbol != symbol or not bars:
         return _unavailable(symbol, now_ms, horizon_ms, spec, "symbol_mismatch")
     asof_ms = bars[-1]["end_ms"]
+    if asof_ms - now_ms > MAX_FUTURE_SKEW_MS:
+        return _unavailable(symbol, asof_ms, horizon_ms, spec, "future_input")
     if now_ms - asof_ms > config.max_stale_ms:
         return _unavailable(symbol, asof_ms, horizon_ms, spec, "stale_input")
     if len(bars) < spec.window + 1:
