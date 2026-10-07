@@ -4,6 +4,7 @@
 //! Any violation invalidates the book; it never keeps serving data after corruption.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::ops::Bound;
 
 use rust_decimal::Decimal;
 use serde::Serialize;
@@ -65,22 +66,21 @@ impl OrderBook {
     }
 
     /// Bids from the best price down, stopping at the deepest price the snapshot covered.
+    /// A `BTreeMap` range: the bound is found once, not compared against every level.
     pub fn top_bids(&self) -> impl Iterator<Item = Level> + '_ {
-        let floor = self.bid_floor;
+        let floor = self.bid_floor.map_or(Bound::Unbounded, Bound::Included);
         self.bids
-            .iter()
+            .range((floor, Bound::Unbounded))
             .rev()
             .map(|(p, q)| (*p, *q))
-            .take_while(move |(p, _)| floor.is_none_or(|f| *p >= f))
     }
 
     /// Asks from the best price up, stopping at the deepest price the snapshot covered.
     pub fn top_asks(&self) -> impl Iterator<Item = Level> + '_ {
-        let ceiling = self.ask_ceiling;
+        let ceiling = self.ask_ceiling.map_or(Bound::Unbounded, Bound::Included);
         self.asks
-            .iter()
+            .range((Bound::Unbounded, ceiling))
             .map(|(p, q)| (*p, *q))
-            .take_while(move |(p, _)| ceiling.is_none_or(|c| *p <= c))
     }
 
     pub fn depth(&self) -> (usize, usize) {
@@ -457,6 +457,77 @@ mod tests {
         assert!(sync.on_update(update(1, 2, 0, &[], &[])).request_snapshot);
         sync.snapshot_failed();
         assert!(sync.on_update(update(3, 4, 2, &[], &[])).request_snapshot);
+    }
+
+    /// `top_bids`/`top_asks` used to be a full iteration cut by `take_while`; the range
+    /// form must yield exactly the same levels for every book and bound, including bounds
+    /// that equal a level, sit between levels, lie outside the book, or differ only in
+    /// scale (`100` vs `100.0`, which `Decimal` orders as equal).
+    #[test]
+    fn range_iteration_matches_the_take_while_reference() {
+        let reference_bids = |b: &OrderBook| -> Vec<Level> {
+            let floor = b.bid_floor;
+            b.bids
+                .iter()
+                .rev()
+                .map(|(p, q)| (*p, *q))
+                .take_while(|(p, _)| floor.is_none_or(|f| *p >= f))
+                .collect()
+        };
+        let reference_asks = |b: &OrderBook| -> Vec<Level> {
+            let ceiling = b.ask_ceiling;
+            b.asks
+                .iter()
+                .map(|(p, q)| (*p, *q))
+                .take_while(|(p, _)| ceiling.is_none_or(|c| *p <= c))
+                .collect()
+        };
+        let mut seed = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = |n: u64| {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            seed % n
+        };
+        for case in 0..2_000 {
+            let mut book = OrderBook::default();
+            let levels = next(40);
+            for _ in 0..levels {
+                // Mixed scales on purpose: 1234, 123.4, 12.34 are distinct prices.
+                let scale = next(3) as u32;
+                let price = Decimal::new(1 + next(2_000) as i64, scale);
+                let qty = Decimal::new(1 + next(500) as i64, 3);
+                if next(2) == 0 {
+                    book.bids.insert(price, qty);
+                } else {
+                    book.asks.insert(price, qty);
+                }
+            }
+            let bound = |next: &mut dyn FnMut(u64) -> u64| match next(4) {
+                0 => None,
+                _ => Some(Decimal::new(next(2_200) as i64, next(3) as u32)),
+            };
+            book.bid_floor = bound(&mut next);
+            book.ask_ceiling = bound(&mut next);
+            // Bounds that are exactly an existing level, written at a different scale.
+            if case % 7 == 0 {
+                if let Some((p, _)) = book.bids.iter().next() {
+                    let mut p = *p;
+                    p.rescale(p.scale() + 1);
+                    book.bid_floor = Some(p);
+                }
+            }
+            assert_eq!(
+                book.top_bids().collect::<Vec<_>>(),
+                reference_bids(&book),
+                "case {case}"
+            );
+            assert_eq!(
+                book.top_asks().collect::<Vec<_>>(),
+                reference_asks(&book),
+                "case {case}"
+            );
+        }
     }
 
     /// A snapshot cut at its level limit says nothing about prices beyond its deepest
