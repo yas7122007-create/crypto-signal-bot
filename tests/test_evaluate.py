@@ -4,7 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from engine import Rules, new_signal, signal_id
 from v2 import evaluate as E
+
+RULES = Rules()
 
 
 def decision(id_, symbol, proposed, final, reason=None, forecast=None, toto=None, gate=None):
@@ -115,6 +118,75 @@ class Metrics(unittest.TestCase):
         self.assertEqual(quality["n"], 1)
         self.assertAlmostEqual(quality["mae_bps"], 5.0)
         self.assertEqual(E.forecast_quality(decisions, {})["n"], 0)
+
+
+class CanonicalIdJoin(unittest.TestCase):
+    """Fix 4 (adversarial-audit corrective pass): record_decision()'s id must be exactly
+    the id a real signal gets from engine.new_signal()/signal_id(), not a second, invented
+    ID scheme -- the old `candidate.get("id") or candidate.get("symbol")` both failed to
+    match a real signal's id (candidates don't carry "id" before new_signal() assigns one)
+    and collided whenever two signals shared a symbol."""
+
+    def candidate(self, symbol="BTCUSDT", candle_ms=1, action="LONG", version="v1"):
+        return dict(symbol=symbol, candle_ms=candle_ms, action=action, version=version)
+
+    def test_decision_id_matches_the_real_signal_id(self):
+        c = self.candidate()
+        self.assertEqual(E.decision_id(c), signal_id(c))
+
+    def test_full_path_record_decision_then_outcome_then_report_joins_correctly(self):
+        """The real integration path: a candidate -> engine.new_signal() (as bot.py would
+        call it) -> record_decision() for the same candidate -> the signal closes ->
+        record_outcome() -> build_report()/forecast_quality() must see them as one row."""
+        with tempfile.TemporaryDirectory() as d:
+            dpath, opath = Path(d) / "d.ndjson", Path(d) / "o.ndjson"
+            candidate = self.candidate()
+            candidate["forecast"] = {"status": "ok", "expected_return_bps": 5.0, "sigma_bps": 10.0}
+            signal = new_signal(candidate, now=0, rules=RULES)
+            E.record_decision(dpath, candidate, "LONG", v2_mode="shadow")
+            closed = dict(signal, status="CLOSED", outcome="TP", net_r=1.0, net_return=0.0005,
+                         fill_ms=0, exit_ms=1000)
+            E.record_outcome(opath, closed)
+            decisions, outcomes = E.load(dpath)[0], E.load(opath)[1]
+            self.assertEqual(decisions[0]["id"], signal["id"])
+            self.assertEqual(outcomes[0]["id"], signal["id"])
+            report = E.build_report(decisions, outcomes).as_dict()
+            self.assertEqual(report["n_decisions"], 1)
+            self.assertEqual(report["n_outcomes"], 1)
+            # forecast_quality() only finds the outcome through the id join -- n=0 would
+            # mean the join silently failed, exactly the bug Fix 4 closes.
+            self.assertEqual(report["forecast_quality"]["n"], 1)
+            self.assertAlmostEqual(report["forecast_quality"]["mae_bps"], 0.0)
+
+    def test_two_signals_on_the_same_symbol_do_not_collide(self):
+        """The old `candidate.get("id") or candidate.get("symbol")` scheme joined by symbol
+        alone whenever no "id" was already present -- two BTCUSDT signals on different
+        candles (or sides) would overwrite each other's outcome in outcomes_by_id."""
+        with tempfile.TemporaryDirectory() as d:
+            dpath, opath = Path(d) / "d.ndjson", Path(d) / "o.ndjson"
+            a = self.candidate(candle_ms=1, action="LONG")
+            b = self.candidate(candle_ms=2, action="SHORT")
+            self.assertNotEqual(E.decision_id(a), E.decision_id(b))
+            sig_a, sig_b = new_signal(a, now=0, rules=RULES), new_signal(b, now=0, rules=RULES)
+            E.record_decision(dpath, a, "LONG")
+            E.record_decision(dpath, b, "SHORT")
+            E.record_outcome(opath, dict(sig_a, status="CLOSED", outcome="TP", net_r=1.0,
+                                        net_return=0.01, fill_ms=0, exit_ms=1000))
+            E.record_outcome(opath, dict(sig_b, status="CLOSED", outcome="SL", net_r=-1.0,
+                                        net_return=-0.01, fill_ms=0, exit_ms=2000))
+            decisions, outcomes = E.load(dpath)[0], E.load(opath)[1]
+            self.assertEqual(len({d["id"] for d in decisions}), 2)
+            outcomes_by_id = {o["id"]: o for o in outcomes}
+            self.assertEqual(len(outcomes_by_id), 2)
+            self.assertEqual(outcomes_by_id[sig_a["id"]]["net_r"], 1.0)
+            self.assertEqual(outcomes_by_id[sig_b["id"]]["net_r"], -1.0)
+
+    def test_hold_with_no_actionable_candidate_gets_its_own_documented_id(self):
+        no_candidate = dict(symbol="ETHUSDT", candle_ms=5)  # no action/version: nothing proposed
+        hold_id = E.decision_id(no_candidate)
+        self.assertTrue(hold_id.startswith(E.HOLD_ID_PREFIX))
+        real = self.candidate(symbol="ETHUSDT", candle_ms=5)
+        self.assertNotEqual(hold_id, E.decision_id(real))
 
 
 class BuildReportAndCli(unittest.TestCase):

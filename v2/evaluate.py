@@ -20,11 +20,15 @@ from dataclasses import dataclass
 import json
 from pathlib import Path
 
+from engine import signal_id
 from v2.metrics import calibration, evaluate as forecast_metrics
 
 DECISION = "decision.v1"
 OUTCOME = "outcome.v1"
 DIRECTIONS = ("LONG", "SHORT")
+HOLD_ID_PREFIX = "hold:"  # engine.signal_id() returns a 24-char sha256 hex digest, which
+# can never start with this, so a real signal's id and a no-candidate HOLD's id can never
+# collide even if compared without checking which kind they are.
 
 
 class JournalError(ValueError):
@@ -37,6 +41,23 @@ def _append(path, record):
         f.write(json.dumps(record, sort_keys=True) + "\n")
 
 
+def decision_id(candidate):
+    """The same id `engine.new_signal()` would assign this exact candidate if it becomes a
+    real paper signal (Fix 4, adversarial-audit corrective pass): `engine.signal_id()` is a
+    pure function of the candidate's own `version`/`symbol`/`candle_ms`/`action`, computed
+    before any gate runs, so using it here -- rather than inventing a second ID scheme --
+    guarantees `record_decision()` and `engine.new_signal()` agree on a signal's id whenever
+    both see the same candidate, including when V2 held a candidate the engine proposed
+    (final_action="HOLD" but a real signal_id-eligible candidate underneath). Never joins by
+    symbol alone: two different candles or sides on the same symbol get different ids.
+    A candidate with nothing actionable proposed (no `action`/`candle_ms`/`version` at all)
+    has no real signal to join against; it gets its own documented, clearly-prefixed id."""
+    try:
+        return signal_id(candidate)
+    except KeyError:
+        return f"{HOLD_ID_PREFIX}{candidate.get('symbol')}:{candidate.get('candle_ms')}"
+
+
 def record_decision(path, candidate, final_action, rejection_reason=None, v2_mode="off"):
     """`final_action` is what was actually done (LONG/SHORT/HOLD) after every gate; a
     candidate the engine itself proposed but V2 held carries both `proposed_action` and
@@ -44,7 +65,7 @@ def record_decision(path, candidate, final_action, rejection_reason=None, v2_mod
     if final_action not in DIRECTIONS + ("HOLD",):
         raise JournalError("final_action must be LONG, SHORT, or HOLD")
     record = dict(
-        record=DECISION, id=candidate.get("id") or candidate.get("symbol"),
+        record=DECISION, id=decision_id(candidate),
         symbol=candidate["symbol"], candle_ms=candidate.get("candle_ms"),
         proposed_action=candidate.get("action"), final_action=final_action,
         rejection_reason=rejection_reason, v2_mode=v2_mode,
