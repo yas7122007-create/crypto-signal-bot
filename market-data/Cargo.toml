@@ -20,3 +20,7 @@ tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
 tempfile = "3"
 # In-process fake Binance servers for the live-loop test.
 tokio = { version = "1.53", features = ["net", "io-util"] }
+
+[[bench]]
+name = "hotpath"
+harness = false

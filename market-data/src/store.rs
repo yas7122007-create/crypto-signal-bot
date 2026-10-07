@@ -297,6 +297,78 @@ mod tests {
         assert_eq!(read_rows(dir.path(), "rows").unwrap().len(), 2);
     }
 
+    fn bar(start_ms: i64, session_id: i64) -> crate::bars::Bar {
+        use rust_decimal::Decimal;
+        crate::bars::Bar {
+            v: crate::bars::BAR_SCHEMA_VERSION,
+            feature_v: crate::features::FEATURE_SCHEMA_VERSION,
+            symbol: "BTCUSDT".into(),
+            session_id: Some(session_id),
+            start_ms,
+            end_ms: start_ms + crate::bars::BAR_MS,
+            rows: 600,
+            complete: start_ms % 120_000 == 0,
+            incomplete_reason: (start_ms % 120_000 != 0).then_some("row_gap"),
+            synced_since_seq: 3,
+            close_seq: 99,
+            open_mid: Decimal::new(500_001, 1),
+            high_mid: Decimal::new(500_005, 1),
+            low_mid: Decimal::new(499_995, 1),
+            close_mid: Decimal::new(500_002, 1),
+            close_microprice: Decimal::new(5_000_023_456, 5),
+            mean_spread_bps: Decimal::new(2, 2),
+            close_spread_bps: Decimal::new(2, 2),
+            close_obi: vec![crate::features::Obi {
+                levels: 10,
+                value: Some(Decimal::new(-125, 3)),
+            }],
+            close_trade_state: crate::features::TradeState::Active,
+            buy_qty: Some(Decimal::new(12_345, 3)),
+            sell_qty: None,
+        }
+    }
+
+    /// The state file is the live contract the Python bridge reads: its exact bytes are
+    /// pinned to the `json!` rendering (sorted keys, Decimals as strings), so a change to
+    /// how it is written cannot silently change what the bridge parses.
+    #[test]
+    fn state_file_bytes_are_pinned_and_windows_are_bounded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut state = BarState::create(dir.path(), 2).unwrap();
+        let bars = [
+            bar(1_700_000_040_000, 1),
+            bar(1_700_000_100_000, 1),
+            bar(1_700_000_160_000, 1),
+        ];
+        for b in &bars {
+            state.update(b).unwrap();
+        }
+        let written = fs::read(dir.path().join("BTCUSDT.json")).unwrap();
+        let expected = serde_json::to_vec(&serde_json::json!({
+            "v": STATE_SCHEMA_VERSION,
+            "kind": "bar_window",
+            "symbol": "BTCUSDT",
+            "bars": [&bars[1], &bars[2]],
+        }))
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(written).unwrap(),
+            String::from_utf8(expected).unwrap()
+        );
+        // A new session never shares a window with the old one.
+        state.update(&bar(1_700_000_220_000, 2)).unwrap();
+        let v: serde_json::Value =
+            serde_json::from_slice(&fs::read(dir.path().join("BTCUSDT.json")).unwrap()).unwrap();
+        assert_eq!(v["bars"].as_array().unwrap().len(), 1);
+        assert_eq!(v["bars"][0]["session_id"], 2);
+        // No temporary file is left behind after an atomic replace.
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        assert_eq!(names, ["BTCUSDT.json"]);
+    }
+
     #[test]
     fn rejects_zero_bounds() {
         let dir = tempfile::tempdir().unwrap();
