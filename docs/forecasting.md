@@ -1,4 +1,4 @@
-# PatchTST forecasting (Phase 3), offline only
+# PatchTST forecasting (Phase 3) and the V2 model layer
 
 `v2/` is a standalone package that forecasts the mid-price return over a fixed horizon from
 recorded one-minute bars ([bar-schema.md](bar-schema.md)). It never places orders. With
@@ -166,13 +166,15 @@ would conflict with the one PatchTST already uses here. `Adapter` is the interfa
 model would implement; `WorkerAdapter` runs one out of process via `v2.workers.run` (a fixed
 argv, JSON on stdin/stdout, a timeout -- exactly the isolation a conflicting torch version
 would need) so a future real adapter does not have to share PatchTST's environment.
-**Model identity is mandatory.** A real adapter's result must carry `model_version`, an
-immutable identity of the artifact that produced it: `sha256:<64 lowercase hex>` (weights or an
+**Model identity is mandatory.** A real adapter's result must carry `model_version`, the
+identity of the artifact that produced it, in an immutable form: `sha256:<64 lowercase hex>` (weights or an
 immutable manifest) or `revision:<40 lowercase hex>` (an upstream commit). A missing value is
 `unavailable` with `reason: "model_version_missing"`; a blank, non-string, overlong, mutable or
 otherwise malformed one is `invalid_model_version`. There is no fallback: the worker's launch
 command (`V2_TOTO_WORKER_CMD`) identifies a process, not a checkpoint, and is never used as a
-model version. `FakeAdapter` (`TEST_ONLY = True`) is always labelled `test:fake-adapter-v1`,
+model version. The identity is self-reported by the worker and only its format is checked:
+nothing here hashes the weights, so it records what the worker claims, not proof of it.
+`FakeAdapter` (`TEST_ONLY = True`) is always labelled `test:fake-adapter-v1`,
 whatever it returns, and that label can never pass the real-identity check.
 `FakeAdapter` is explicitly marked as a test-only stand-in (a toy OBI-direction rule) used to
 prove `validate()`'s fail-closed wrapper actually works: a raising adapter, a timing-out
@@ -192,6 +194,10 @@ everything else: a threshold that is not a finite number above zero is `invalid_
 replaced by a default), any measurement failure on Linux is `telemetry_error`, a non-Linux host
 is `resource_unsupported`, and a bug in the gate is `gate_error`. Every skip returns
 `"NOT_AVAILABLE"`; the mutex is released on success, model exception and every rejection.
+The gate only measures on Linux, so on the Windows laptop setup in README.md neither model ever
+runs. On a Toto timeout the worker's whole process group is killed (POSIX), so a wrapper-style
+`V2_TOTO_WORKER_CMD` cannot leave a model running after the mutex is released; a worker that
+deliberately detaches into its own session would still escape.
 `v2.patchtst.configure()` separately bounds PyTorch's own thread count.
 
 ## Phase 5B: Nemotron CONFIRM/HOLD gate (`reasoning.confirm_gate`)

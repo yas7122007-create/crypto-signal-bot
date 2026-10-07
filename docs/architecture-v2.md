@@ -13,7 +13,7 @@ Binance Futures WebSocket
   -> Python/Rust interface                    Phase 4   implemented (v2/bridge.py); reachable from bot.scan() as advisory evidence when V2_MODE is shadow/on
   -> PatchTST forecasting                     Phase 3   implemented (v2/patchtst.py); live-reachable advisory evidence behind V2_MODE + ResourceGate
   -> Deterministic strategy / risk gate       existing  engine.py, validate_market
-  -> Toto final validation                    Phase 5   implemented (v2/toto.py); no real model available here (needs HuggingFace + a conflicting torch version); live-reachable advisory evidence behind V2_MODE + V2_TOTO_WORKER_CMD + ResourceGate
+  -> Toto final validation                    Phase 5   implemented (v2/toto.py); no real model available here (needs HuggingFace + a conflicting torch version); live-reachable advisory evidence behind V2_MODE + V2_STATE_DIR + V2_TOTO_WORKER_CMD + an ok PatchTST forecast + ResourceGate
   -> Nemotron reasoning / explanation         existing  advisory, implemented (reasoning.explain)
   -> Nemotron CONFIRM/HOLD gate               Phase 5B  implemented (reasoning.confirm_gate); research/shadow only, not called anywhere
   -> Deterministic ranking (max 3)            Phase 6   implemented (v2/ranking.py); not wired into bot.scan()
@@ -93,7 +93,7 @@ Live call path: `bot.scan()` -> `reasoning.explain()` (for each candidate that p
 | Category | Components | What it means |
 |---|---|---|
 | Live authoritative | `engine.analyze`, `validate_market`, risk rules, `new_signal`, the V1 paper journal | The only code that decides whether a signal exists, its action, entry, stop and target. Unchanged by any V2_MODE value. |
-| Live-reachable advisory | PatchTST forecast, Toto validation | With `V2_MODE=shadow` or `on` and the required config set, their output is added to the evidence Nemotron explains. It is text Nemotron reads; it cannot change the action or levels. Its only indirect effect is latency (bounded by `V2_TOTO_TIMEOUT_SECONDS` and the gate), which runs before the fresh market revalidation and can therefore make that revalidation HOLD a signal. |
+| Live-reachable advisory | PatchTST forecast, Toto validation | With `V2_MODE=shadow` or `on`, the required config set, and a Linux host (the gate never runs them elsewhere, including the Windows laptop setup in README.md), they run inside `reasoning.explain()` for every candidate that passed the deterministic gates, even when Nemotron itself is then skipped (no API key, the 5-per-cycle cap, an earlier outage); their output is added to the evidence Nemotron explains, or discarded when it is skipped. It cannot change the action or levels. Its indirect effect is CPU and latency per candidate: Toto is bounded by `V2_TOTO_TIMEOUT_SECONDS`, PatchTST runs in-process with no timeout. Both run before the fresh market revalidation, so a delay can make that revalidation HOLD a signal. |
 | Implemented but not wired | `reasoning.confirm_gate`, `v2/ranking.py` (max 3), `v2/evaluate.py` (paper evaluation) | Tested in isolation; no production caller. |
 | Research/shadow only | Nemotron CONFIRM/HOLD | Not a production veto. Wiring it would need the owner's explicit decision (see docs/forecasting.md). |
 
