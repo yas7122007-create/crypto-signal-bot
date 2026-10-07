@@ -12,6 +12,7 @@ set -eu
 cd "$(dirname "$0")/.."
 out=target/asm-audit
 mkdir -p "$out"
+trap 'rm -f "$out/fn.tmp"' EXIT
 cargo rustc --release --lib --locked -q -- --emit=asm,obj -C debuginfo=1
 lib_s=$(ls -t target/release/deps/market_data-*.s | head -1)
 lib_o=$(ls -t target/release/deps/market_data-*.o | head -1)

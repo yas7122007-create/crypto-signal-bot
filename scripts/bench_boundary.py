@@ -2,8 +2,8 @@
 
     python scripts/bench_boundary.py STATE_FILE
 
-STATE_FILE is a `<SYMBOL>.json` bar-window file written by the Rust recorder (the bench
-`cargo bench --bench hotpath` leaves one in /tmp/claude-0/perf). Measures, per call:
+STATE_FILE is a `<SYMBOL>.json` bar-window file written by the Rust recorder
+(`HOTPATH_STATE_OUT=PATH cargo bench --bench hotpath` writes one to PATH). Measures, per call:
 reading + validating the state file (the whole boundary), building the model window, one
 PatchTST prediction on a small model trained here on SYNTHETIC bars (latency only, no
 claim about accuracy), the full bridge.forecast(), and one Toto-style worker subprocess

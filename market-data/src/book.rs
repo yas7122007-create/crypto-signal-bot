@@ -516,6 +516,11 @@ mod tests {
                     p.rescale(p.scale() + 1);
                     book.bid_floor = Some(p);
                 }
+                if let Some((p, _)) = book.asks.iter().next_back() {
+                    let mut p = *p;
+                    p.rescale(p.scale() + 1);
+                    book.ask_ceiling = Some(p);
+                }
             }
             assert_eq!(
                 book.top_bids().collect::<Vec<_>>(),

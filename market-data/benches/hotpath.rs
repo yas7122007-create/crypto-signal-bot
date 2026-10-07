@@ -531,7 +531,14 @@ fn main() {
     let dir = tempfile::tempdir().unwrap();
     // HOTPATH_KEEP=1 keeps the recording and outputs (for replay-equivalence checks).
     let dir_path = dir.path().to_path_buf();
-    let _keep = std::env::var_os("HOTPATH_KEEP").map(|_| dir.keep());
+    // `dir` must stay alive (or be kept) for the whole run, or it is deleted under us.
+    let kept = std::env::var_os("HOTPATH_KEEP").is_some();
+    let _dir = if kept {
+        let _ = dir.keep();
+        None
+    } else {
+        Some(dir)
+    };
     let rec_dir = dir_path.as_path().join("rec");
     {
         // The per-call pass writes to a second recorder, so `rec_dir` holds one clean copy.
@@ -680,11 +687,10 @@ fn main() {
             },
         ));
     }
-    std::fs::copy(
-        state_dir.join("BTCUSDT.json"),
-        "/tmp/claude-0/perf/BTCUSDT.state.json",
-    )
-    .ok();
+    // HOTPATH_STATE_OUT=PATH copies the 256-bar state file out for scripts/bench_boundary.py.
+    if let Some(out) = std::env::var_os("HOTPATH_STATE_OUT") {
+        std::fs::copy(state_dir.join("BTCUSDT.json"), out).unwrap();
+    }
 
     println!(
         "\nmarket-data hot path ({} diffs, {} events)",

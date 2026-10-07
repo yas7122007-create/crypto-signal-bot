@@ -354,10 +354,13 @@ mod tests {
             "bars": [&bars[1], &bars[2]],
         }))
         .unwrap();
-        assert_eq!(
-            String::from_utf8(written).unwrap(),
-            String::from_utf8(expected).unwrap()
-        );
+        let written = String::from_utf8(written).unwrap();
+        assert_eq!(written, String::from_utf8(expected).unwrap());
+        // And literally: sorted keys, Decimals as exact strings, absent values as null.
+        assert!(written.starts_with(
+            r#"{"bars":[{"buy_qty":"12.345","close_microprice":"50000.23456","close_mid":"50000.2","close_obi":[{"levels":10,"value":"-0.125"}],"#
+        ));
+        assert!(written.ends_with(r#""sell_qty":null,"session_id":1,"start_ms":1700000160000,"symbol":"BTCUSDT","synced_since_seq":3,"v":1}],"kind":"bar_window","symbol":"BTCUSDT","v":1}"#));
         // A new session never shares a window with the old one.
         state.update(&bar(1_700_000_220_000, 2)).unwrap();
         let v: serde_json::Value =
