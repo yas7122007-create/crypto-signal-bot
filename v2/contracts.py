@@ -19,6 +19,10 @@ class ContractError(ValueError):
     pass
 
 
+TOTO = "toto.v1"
+DECISIONS = ("CONFIRM", "REJECT", "HOLD")
+
+
 def finite(value, field, lo=-math.inf, hi=math.inf):
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ContractError(f"{field}: expected a finite number")
@@ -46,6 +50,58 @@ def exact_keys(obj, required, optional=()):
     extra = obj.keys() - set(required) - set(optional)
     if missing or extra:
         raise ContractError(f"fields: missing {sorted(missing)}, unexpected {sorted(extra)}")
+
+
+TOTO_KEYS = ("contract", "status", "reason", "symbol", "asof_ms", "model", "model_version",
+            "decision", "p_up", "confidence", "disagreement_reason")
+
+
+def toto(symbol, asof_ms, model, model_version, decision=None, p_up=None, confidence=None,
+         disagreement_reason=None, reason=None):
+    """Builds a toto.v1 object. A disagreement_reason may accompany CONFIRM or REJECT alike
+    (it always says why Toto's own read differs from the input, not whether it gated); it is
+    required on REJECT and optional elsewhere."""
+    ok = reason is None
+    if ok:
+        if decision not in DECISIONS:
+            raise ContractError("decision: expected CONFIRM, REJECT, or HOLD")
+        p_up, confidence = (finite(v, f, 0.0, 1.0) for v, f in ((p_up, "p_up"), (confidence, "confidence")))
+        if decision == "REJECT" and not disagreement_reason:
+            raise ContractError("disagreement_reason required on REJECT")
+    out = dict(contract=TOTO, status="ok" if ok else "unavailable", reason=reason, symbol=symbol,
+               asof_ms=asof_ms, model=model, model_version=model_version,
+               decision=decision if ok else None, p_up=round(p_up, 6) if ok else None,
+               confidence=round(confidence, 6) if ok else None,
+               disagreement_reason=disagreement_reason if ok else None)
+    return validate_toto(out)
+
+
+def validate_toto(obj):
+    exact_keys(obj, TOTO_KEYS)
+    if obj["contract"] != TOTO:
+        raise ContractError("not a toto.v1 object")
+    text(obj["symbol"], "symbol", SYMBOL)
+    integer(obj["asof_ms"], "asof_ms", 1)
+    text(obj["model"], "model", REASON)
+    text(obj["model_version"], "model_version", VERSION)
+    if obj["status"] == "ok":
+        if obj["reason"] is not None:
+            raise ContractError("reason must be null when ok")
+        if obj["decision"] not in DECISIONS:
+            raise ContractError("decision: expected CONFIRM, REJECT, or HOLD")
+        finite(obj["p_up"], "p_up", 0.0, 1.0)
+        finite(obj["confidence"], "confidence", 0.0, 1.0)
+        if obj["decision"] == "REJECT" and not obj["disagreement_reason"]:
+            raise ContractError("disagreement_reason required on REJECT")
+        if obj["disagreement_reason"] is not None:
+            text(obj["disagreement_reason"], "disagreement_reason", REASON)
+    elif obj["status"] == "unavailable":
+        text(obj["reason"], "reason", REASON)
+        if any(obj[k] is not None for k in ("decision", "p_up", "confidence", "disagreement_reason")):
+            raise ContractError("an unavailable result carries no decision fields")
+    else:
+        raise ContractError("status: expected ok or unavailable")
+    return obj
 
 
 FORECAST_KEYS = ("contract", "status", "reason", "symbol", "asof_ms", "horizon_ms", "target",

@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import sys
 
 from engine import (INTERVALS, Rules, ai_decision, analyze, candles, features,
@@ -229,6 +229,57 @@ def nemotron_checks(candidate, rules):
     assert key not in logs.getvalue() and key not in json.dumps(outputs) and "SECRET" not in json.dumps(outputs)
     print("PASS: NVIDIA API key never appears in logs or stored reasoning results")
     scan_checks(candidate, rules)
+
+
+def gate_checks(candidate, rules):
+    """Phase 5B: confirm_gate() never returns CONFIRM except from a parsed, schema-valid
+    CONFIRM; every other path (disabled, degraded, provider error, bad JSON, unknown
+    provider) is HOLD."""
+    import httpx
+    import reasoning
+    history = {"sample_count": 25, "average_net_r": 0.1}
+    with patch.dict("os.environ", {"AI_PROVIDER": "mock"}):
+        result = reasoning.confirm_gate(candidate, history)
+        assert result["decision"] == "CONFIRM" and result["risk_flags"] == []
+        thin = reasoning.confirm_gate(candidate, {"sample_count": 0})
+        assert thin["decision"] == "HOLD" and "jurnal_paper_masih_tipis" in thin["risk_flags"]
+    with patch.dict("os.environ", {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": ""}):
+        disabled = reasoning.confirm_gate(candidate, history)
+        assert disabled["decision"] == "HOLD" and disabled["status"] == "DISABLED"
+    with patch.dict("os.environ", {"AI_PROVIDER": "qwen"}):
+        invalid = reasoning.confirm_gate(candidate, history)
+        assert invalid["decision"] == "HOLD" and invalid["status"] == "ERROR"
+    with patch.dict("os.environ", {"AI_PROVIDER": "ollama"}):
+        legacy = reasoning.confirm_gate(candidate, history)
+        assert legacy["decision"] == "HOLD" and legacy["status"] == "DEGRADED"
+    env = {"AI_PROVIDER": "nemotron", "NVIDIA_API_KEY": "nvapi-TEST", "NEMOTRON_TIMEOUT_SECONDS": "30",
+           "NVIDIA_BASE_URL": reasoning.DEFAULT_URL, "NEMOTRON_MODEL": reasoning.DEFAULT_MODEL,
+           "NEMOTRON_MAX_RETRIES": "0", "NEMOTRON_THINKING": "false"}
+
+    def reply(decision="CONFIRM"):
+        body = {"decision": decision, "confidence": 0.8, "rationale": "ok", "risk_flags": []}
+        r = MagicMock(status_code=200)
+        r.json.return_value = {"model": "nvidia/nemotron-3-super-120b-a12b",
+                               "choices": [{"finish_reason": "stop",
+                                            "message": {"content": json.dumps(body)}}]}
+        return r
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post", return_value=reply()):
+        ok = reasoning.confirm_gate(candidate, history)
+        assert ok["decision"] == "CONFIRM" and ok["status"] == "OK"
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post", return_value=reply("HOLD")):
+        held = reasoning.confirm_gate(candidate, history)
+        assert held["decision"] == "HOLD"
+    bad = MagicMock(status_code=200)
+    bad.json.return_value = {"model": "x", "choices": [{"finish_reason": "stop",
+                                                         "message": {"content": "not json"}}]}
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post", return_value=bad):
+        malformed = reasoning.confirm_gate(candidate, history)
+        assert malformed["decision"] == "HOLD" and malformed["status"] == "ERROR"
+    with patch.dict("os.environ", env), patch("reasoning.httpx.post",
+                                              side_effect=httpx.ConnectError("down")):
+        down = reasoning.confirm_gate(candidate, history)
+        assert down["decision"] == "HOLD"
+    print("PASS: confirm_gate CONFIRM only from a valid provider reply; every failure is HOLD")
 
 
 def v2_bridge_checks(candidate):
@@ -505,6 +556,7 @@ def main():
     nemotron_checks({**long, "market": dict(bid=120.59, ask=120.61, spread_bps=1.6,
                                             funding_rate=0.0001, net_rr_estimate=1.8)}, rules)
     v2_bridge_checks(long)
+    gate_checks(long, rules)
 
     if "--nemotron-live" in sys.argv:
         # Optional smoke test against NVIDIA's hosted API; needs NVIDIA_API_KEY in .env. Never prints the key.

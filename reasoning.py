@@ -115,6 +115,103 @@ def parse_result(text):
     return obj
 
 
+GATE_SYSTEM = (
+    "Anda lapisan gating final untuk engine kuantitatif sinyal crypto futures. Kandidat sudah "
+    "LULUS aturan deterministik, risk gate, dan (jika tersedia) validasi Toto; forecast PatchTST "
+    "dan validasi Toto diberikan sebagai bukti terstruktur, bukan untuk dipercaya mentah. Tugas "
+    "Anda: putuskan CONFIRM jika bukti benar-benar mendukung, atau HOLD jika ragu, bukti lemah, "
+    "kontradiktif, atau forecast/validasi NOT_AVAILABLE/bertentangan dengan arah kandidat. Jangan "
+    "membuat harga, probabilitas, atau berita baru; gunakan hanya angka dari data yang diberikan. "
+    "Jika ragu, pilih HOLD. Balas HANYA satu objek JSON dengan field: decision (CONFIRM atau "
+    "HOLD), confidence (0..1), rationale (maksimal 400 karakter, bahasa Indonesia), risk_flags "
+    "(daftar string, maksimal 10 item, setiap item maksimal 80 karakter)."
+)
+GATE_FIELDS = {"decision", "confidence", "rationale", "risk_flags"}
+
+
+def parse_gate_result(text):
+    if not isinstance(text, str):
+        raise ValueError("Konten gating kosong")
+    text = re.sub(r"(?s)^.*</think>", "", text).strip()
+    fenced = re.fullmatch(r"(?s)```(?:json)?\s*(.*?)\s*```", text)
+    obj = json.loads(fenced.group(1) if fenced else text)
+    if not isinstance(obj, dict) or set(obj) != GATE_FIELDS:
+        raise ValueError("Respons gating tidak sesuai schema")
+    if obj["decision"] not in ("CONFIRM", "HOLD"):
+        raise ValueError("decision harus CONFIRM atau HOLD")
+    if isinstance(obj["confidence"], bool) or not isinstance(obj["confidence"], (int, float)) \
+            or not 0.0 <= obj["confidence"] <= 1.0:
+        raise ValueError("confidence harus 0..1")
+    if not isinstance(obj["rationale"], str) or not 1 <= len(obj["rationale"].strip()) <= 400:
+        raise ValueError("rationale tidak valid")
+    flags = obj["risk_flags"]
+    if (not isinstance(flags, list) or len(flags) > 10
+            or not all(isinstance(f, str) and 1 <= len(f.strip()) <= 80 for f in flags)):
+        raise ValueError("risk_flags tidak valid")
+    return obj
+
+
+class MockGateProvider:
+    """Deterministic CONFIRM/HOLD without network: confirms only when the journal already
+    has enough samples and nothing in the evidence contradicts the candidate's own direction."""
+    name = "mock"
+
+    def confirm(self, ev):
+        c, journal = ev["candidate"], ev.get("journal") or {}
+        forecast, toto = ev.get("forecast", {}).get("patchtst"), ev.get("forecast", {}).get("toto")
+        flags = []
+        samples = journal.get("sample_count") or 0
+        if samples < c.get("rules", {}).get("evaluation_samples", 20):
+            flags.append("jurnal_paper_masih_tipis")
+        side = c.get("action")
+        if isinstance(forecast, dict) and forecast.get("status") == "ok":
+            if (forecast.get("p_up", 0.5) > 0.5) != (side == "LONG"):
+                flags.append("forecast_patchtst_berlawanan_arah")
+        if isinstance(toto, dict) and toto.get("status") == "ok" and toto.get("decision") == "REJECT":
+            flags.append("toto_reject")
+        decision = "HOLD" if flags else "CONFIRM"
+        return {"decision": decision, "confidence": 0.5 if flags else 0.7,
+                "rationale": c.get("reason", "")[:400] or "Tidak ada rationale",
+                "risk_flags": flags}, "deterministic"
+
+
+def confirm_gate(candidate, history, now_ms=None):
+    """Phase 5B: a strict CONFIRM/HOLD structured gate, separate from explain()'s advisory
+    summary. Only meaningful when V2_MODE is "on" (Phase 6 decides whether to use it to
+    gate); evaluating it here never touches engine.analyze() or the deterministic decision.
+    Fails closed on every error path: timeout, invalid JSON, provider failure, disabled,
+    missing key, or an unknown provider all become HOLD, never CONFIRM. The only way to get
+    CONFIRM is a parsed, schema-valid CONFIRM from the provider itself."""
+    provider, start = provider_name(), time.monotonic()
+    ev = evidence(candidate, history, now_ms)
+    meta = dict(symbol=candidate.get("symbol"), model_name=provider, model_version=None,
+                status="OK", error=None)
+    fields = None
+    try:
+        if provider == "mock":
+            fields, meta["model_version"] = MockGateProvider().confirm(ev)
+        elif provider == "nemotron":
+            nemotron = NemotronProvider()
+            meta["model_name"] = nemotron.name
+            if not nemotron.key:
+                meta.update(status="DISABLED", error="NVIDIA_API_KEY belum diisi")
+            else:
+                fields, meta["model_version"] = nemotron.explain(ev, system=GATE_SYSTEM,
+                                                                  parse=parse_gate_result)
+        else:
+            check_provider(provider)
+            meta.update(status="DEGRADED", error=f"AI_PROVIDER={provider} tidak didukung gating v2")
+    except TimeoutError as exc:
+        meta.update(status="DEGRADED", error=f"Nemotron gating timeout: {safe_error(exc)}")
+    except Exception as exc:  # Never let a provider failure become CONFIRM.
+        meta.update(status="ERROR", error=safe_error(exc))
+    meta["latency_ms"] = round((time.monotonic() - start) * 1000, 1)
+    if fields is None:
+        return dict(meta, decision="HOLD", confidence=0.0, rationale=meta["error"] or "tidak tersedia",
+                   risk_flags=["provider_unavailable"])
+    return dict(meta, **fields)
+
+
 class MockReasoningProvider:
     """Deterministic summary without network; also the degraded-mode content."""
     name = "mock"
@@ -158,7 +255,9 @@ class NemotronProvider:
         self.max_tokens = bounded("NEMOTRON_MAX_TOKENS", "1500", 256, 16000, int)
         self.thinking = os.getenv("NEMOTRON_THINKING", "false").lower() == "true"
 
-    def explain(self, ev):
+    def explain(self, ev, system=None, parse=None):
+        system = SYSTEM if system is None else system
+        parse = parse_result if parse is None else parse
         address = urlparse(self.url)
         local = address.hostname in ("127.0.0.1", "localhost")
         if not address.hostname or not (address.scheme == "https" or (address.scheme == "http" and local)):
@@ -167,7 +266,7 @@ class NemotronProvider:
                 # NVIDIA suggests 1.0; lower favors schema-stable JSON. Tune after measuring parse failures.
                 "temperature": 0.3, "top_p": 0.95,
                 "chat_template_kwargs": {"enable_thinking": self.thinking},
-                "messages": [{"role": "system", "content": SYSTEM},
+                "messages": [{"role": "system", "content": system},
                              {"role": "user", "content": dump(ev)}]}
         headers = {"Authorization": "Bearer " + self.key, "Accept": "application/json"}
         deadline = time.monotonic() + self.timeout
@@ -190,7 +289,7 @@ class NemotronProvider:
         if choice.get("finish_reason") == "length":
             raise ValueError("Jawaban Nemotron terpotong")
         version = str(data.get("model") or self.name)[:120]
-        return parse_result(choice["message"]["content"]), version
+        return parse(choice["message"]["content"]), version
 
     def poll(self, response, headers, deadline):
         # Documented NVIDIA async mode: 202 means pending; poll /status/{NVCF-REQID} until 200.

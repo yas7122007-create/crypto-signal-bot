@@ -147,3 +147,60 @@ what Nemotron is shown, and Nemotron is advisory. `check.py`'s new
 `v2_bridge_checks()` covers `V2_MODE` validation and that every failure mode degrades to
 `"NOT_AVAILABLE"` rather than crashing the scan loop, on hosts with and without the ML
 extras installed.
+
+## Phase 5: Toto validator (`v2/toto.py`, `v2/workers.py`)
+
+A second, independent read on the same window and the PatchTST forecast, producing a
+`toto.v1` object (`v2/contracts.py`): `CONFIRM`, `REJECT` (with a `disagreement_reason`), or
+`HOLD`, plus `p_up` and `confidence`. It validates; it is never given veto power beyond what
+Phase 6's ranking assigns it, and it never runs when there is no `ok` forecast to check
+(`reason: "no_forecast_to_validate"`).
+
+**Not wired up to a real model in this environment**, and this is reported accurately rather
+than worked around: the `toto-ts` package needs HuggingFace to fetch its weights (blocked by
+this container's network policy -- see Phase 2.5's smoke test) and pins a torch version that
+would conflict with the one PatchTST already uses here. `Adapter` is the interface a real
+model would implement; `WorkerAdapter` runs one out of process via `v2.workers.run` (a fixed
+argv, JSON on stdin/stdout, a timeout -- exactly the isolation a conflicting torch version
+would need) so a future real adapter does not have to share PatchTST's environment.
+`FakeAdapter` is explicitly marked as a test-only stand-in (a toy OBI-direction rule) used to
+prove `validate()`'s fail-closed wrapper actually works: a raising adapter, a timing-out
+worker, and invalid or out-of-range output all become `status: "unavailable"` with a specific
+`reason`, never a crash and never a fabricated decision. **NOT VERIFIED against a real Toto
+model or real market data** -- only the plumbing is tested.
+
+Running PatchTST and Toto "sequentially to reduce CPU contention" (the Phase 5 requirement)
+falls out of the design rather than needing scheduling code: `v2.bridge.forecast()` and
+`v2.toto.validate()` are both synchronous, in-process calls from the same caller, so nothing
+here introduces concurrency between them; `v2.patchtst.configure()` already bounds
+PyTorch's own thread count.
+
+## Phase 5B: Nemotron CONFIRM/HOLD gate (`reasoning.confirm_gate`)
+
+A second Nemotron entry point, `confirm_gate(candidate, history, now_ms=None)`, alongside the
+existing `explain()`. It reuses `NemotronProvider`'s HTTP, retry, backoff and 202-polling
+code (now parameterized by `system` and `parse`, `explain()`'s own default behavior and
+tests unchanged) with a different system prompt (`GATE_SYSTEM`) and a different strict schema
+(`decision` CONFIRM/HOLD, `confidence`, `rationale`, `risk_flags`; `parse_gate_result`). Every
+failure path -- missing key (`DISABLED`), an unsupported provider (`ERROR`), a legacy
+provider not wired to gating (`DEGRADED`), a timeout (`DEGRADED`), malformed JSON or an
+API error (`ERROR`) -- returns `decision: "HOLD"`; the only way to get `"CONFIRM"` is a
+parsed, schema-valid `CONFIRM` from the provider. `check.py`'s `gate_checks()` exercises
+every one of these paths including the two real-looking HTTP replies (CONFIRM and HOLD).
+
+### A documented conflict with the existing architecture
+
+`reasoning.py`'s module docstring and the original PRD say the AI layer only explains a
+decision that is "final and bukan wewenang Anda" (not its authority) -- Nemotron, through
+`explain()`, can never change the action. Phase 5B's brief asks for the opposite: Nemotron as
+"the final reasoning/validation layer" whose CONFIRM/HOLD gates whether a signal proceeds.
+
+This is resolved the same way as the rest of V2: `confirm_gate()` exists and is fully tested,
+but nothing calls it yet, and `V2_MODE` stays `off` by default. `engine.analyze()` and
+`explain()`'s advisory behavior are completely unchanged; `check.py` passes exactly as before
+Phase 5B. Phase 6 is where a `V2_MODE=on` ranking layer would actually call `confirm_gate()`
+and use its decision to gate a candidate -- at which point the project is explicitly choosing
+to let AI output affect which candidates reach Telegram, which the original PRD's wording
+ruled out for `explain()`. Astra should treat this as a design decision that needs the
+project owner's explicit sign-off before `V2_MODE` is ever set to anything but `off` in a
+place a real signal could be issued, paper or otherwise.
