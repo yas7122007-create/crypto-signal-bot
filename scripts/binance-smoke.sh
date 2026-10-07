@@ -10,7 +10,7 @@ set -euo pipefail
 
 seconds="${1:-120}"
 symbols="${2:-BTCUSDT}"
-[[ "$seconds" =~ ^[0-9]{1,6}$ ]] || { echo "SECONDS must be an integer" >&2; exit 2; }
+[[ "$seconds" =~ ^[1-9][0-9]{0,5}$ ]] || { echo "SECONDS must be a positive integer" >&2; exit 2; }
 [[ "$symbols" =~ ^[A-Za-z0-9]{2,30}(,[A-Za-z0-9]{2,30}){0,44}$ ]] || { echo "bad SYMBOLS" >&2; exit 2; }
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,12 +23,13 @@ set +e
 endpoints=()
 [[ -n "${SMOKE_WS_URL:-}" ]] && endpoints+=(--ws-url "$SMOKE_WS_URL")
 [[ -n "${SMOKE_REST_URL:-}" ]] && endpoints+=(--rest-url "$SMOKE_REST_URL")
-timeout -s INT "$seconds" "$bin" record --symbols "$symbols" --out "$out/rec" \
+timeout --preserve-status -k 30 -s INT "$seconds" "$bin" record --symbols "$symbols" --out "$out/rec" \
   --features-dir "$out/live-features" "${endpoints[@]}" 2> "$out/record.log"
 code=$?
 set -e
-# timeout exits 124 after delivering SIGINT; the recorder then shuts down cleanly.
-if [[ $code -ne 0 && $code -ne 124 ]]; then
+# SIGINT asks the recorder to finish cleanly; --preserve-status reports its own exit code
+# (0 only after a clean shutdown), and -k kills it if shutdown hangs for 30 s.
+if [[ $code -ne 0 ]]; then
   echo "recorder failed with exit $code, see $out/record.log" >&2
   exit 1
 fi

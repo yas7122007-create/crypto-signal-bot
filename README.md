@@ -189,7 +189,7 @@ Satu baris fitur dikeluarkan setelah setiap event depth yang membuat book tersin
 
 - Replay dari rekaman yang sama menghasilkan baris fitur yang identik byte demi byte. Konfigurasi fitur ikut tercatat di `session_start`; `replay` menolak rekaman dengan konfigurasi berbeda kecuali diberi `--allow-config-mismatch`.
 - `trade_state` membedakan `active`, `quiet` (pasar sepi yang wajar) dan `stale` (trade diam terlalu lama sementara depth tetap mengalir); saat `stale`, CVD dan delta tidak dilaporkan (`null`), bukan diisi nol.
-- File fitur berupa gzip NDJSON yang dirotasi, dengan batas jumlah file per run; file yang sedang ditulis berakhiran `.partial`.
+- File fitur berupa gzip NDJSON yang dirotasi, dengan batas jumlah file per run; semua file sebuah run berakhiran `.partial` sampai run selesai dengan bersih, dan replay gagal bila ada baris yang terbuang karena batas file.
 
 Uji asap dengan Binance asli (data publik saja): `scripts/binance-smoke.sh 300 BTCUSDT`. Jika jaringan atau proxy memblokir Binance, skrip gagal dengan kode 3; TLS tidak pernah dilemahkan.
 

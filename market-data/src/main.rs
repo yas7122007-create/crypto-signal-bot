@@ -15,7 +15,7 @@ use std::time::Duration;
 use market_data::binance::{normalize_symbol, MAX_SYMBOLS, REST_URL, WS_URL};
 use market_data::features::FeatureConfig;
 use market_data::live::{run, Config, Outputs};
-use market_data::pipeline::Pipeline;
+use market_data::pipeline::{AuditEvent, Pipeline};
 use market_data::recorder::replay;
 use market_data::store::{RowStore, StoreConfig};
 
@@ -91,12 +91,59 @@ fn secure(url: &str, scheme: &str) -> bool {
         || url.starts_with("http://127.0.0.1")
 }
 
+const SHARED: &[&str] = &[
+    "--features-dir",
+    "--features-rotate-mb",
+    "--features-max-files",
+    "--cvd-windows-ms",
+    "--obi-levels",
+    "--trade-quiet-ms",
+    "--trade-stale-ms",
+    "--bars-dir",
+];
+
+/// Unknown flags and missing values are errors: a typo must not silently disable output.
+fn check_args(args: &[String], values: &[&str], switches: &[&str]) -> Result<(), String> {
+    let mut i = 1;
+    while i < args.len() {
+        let flag = args[i].as_str();
+        if switches.contains(&flag) {
+            i += 1;
+        } else if values.contains(&flag) || SHARED.contains(&flag) {
+            match args.get(i + 1) {
+                Some(v) if !v.starts_with("--") => i += 2,
+                _ => return Err(format!("{flag} needs a value")),
+            }
+        } else {
+            return Err(format!("unknown argument {flag}"));
+        }
+    }
+    Ok(())
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    let (values, switches): (&[&str], &[&str]) = match args.first().map(String::as_str) {
+        Some("record") => (
+            &[
+                "--symbols",
+                "--out",
+                "--ws-url",
+                "--rest-url",
+                "--state-dir",
+            ],
+            &[],
+        ),
+        Some("replay") => (&["--input"], &["--audit", "--allow-config-mismatch"]),
+        _ => return usage(),
+    };
+    if let Err(e) = check_args(&args, values, switches) {
+        eprintln!("{e}");
+        return usage();
+    }
     match args.first().map(String::as_str) {
         Some("record") => record(&args),
-        Some("replay") => replay_command(&args),
-        _ => usage(),
+        _ => replay_command(&args),
     }
 }
 
@@ -200,34 +247,59 @@ fn replay_command(args: &[String]) -> ExitCode {
     };
     let mut pipeline = Pipeline::new(features);
     let mut failure: Option<std::io::Error> = None;
-    let result = replay(&PathBuf::from(input), |env| {
+    let read = replay(&PathBuf::from(input), |env| {
         if failure.is_some() {
-            return;
+            return; // Already failed: the rest is read but not processed.
         }
         // Snapshot requests are ignored: recorded snapshots replay in order.
         let step = pipeline.handle(&env);
         if pipeline.stats.config_mismatch > 0 && !allow_mismatch {
-            failure = Some(std::io::Error::other(
-                "recording was made with a different feature config (see --audit); pass the same flags or --allow-config-mismatch",
-            ));
+            let recorded = pipeline
+                .audit()
+                .filter_map(|e| match &e.event {
+                    AuditEvent::ConfigMismatch { recorded } => Some(recorded.to_string()),
+                    _ => None,
+                })
+                .last();
+            failure = Some(std::io::Error::other(format!(
+                "recording was made with feature config {}; pass the same flags or --allow-config-mismatch",
+                recorded.unwrap_or_default()
+            )));
             return;
         }
         failure = outputs.write(&step).err();
-    })
-    .and_then(|stats| match failure.take() {
-        Some(e) => Err(e),
-        None => Ok(stats),
     });
-    // Failed replays leave their outputs `.partial`, never looking complete.
-    let result = match outputs.close(result.is_ok()) {
-        Ok(()) => result,
-        Err(e) => result.and(Err(e)),
+    // The first failure wins over a later read error.
+    let result = match failure.take() {
+        Some(e) => Err(e),
+        None => read,
     };
+    // Failed replays leave every output file `.partial`, never looking complete.
+    let (result, written) = match outputs.close(result.is_ok()) {
+        Ok(written) => (result, written),
+        Err(e) => (result.and(Err(e)), serde_json::Value::Null),
+    };
+    let dropped: u64 = written
+        .as_object()
+        .map(|o| o.values().filter_map(|v| v["dropped_rows"].as_u64()).sum())
+        .unwrap_or(0);
+    let result = match result {
+        Ok(_) if dropped > 0 => Err(std::io::Error::other(format!(
+            "{dropped} rows dropped by --features-max-files; output is incomplete"
+        ))),
+        other => other,
+    };
+    if pipeline.stats.config_unverified > 0 {
+        eprintln!(
+            "warning: {} session(s) without a recorded feature config; not verifiable",
+            pipeline.stats.config_unverified
+        );
+    }
     match result {
         Ok(stats) => {
             let mut report = serde_json::json!({
                 "files": stats.files, "events": stats.events, "truncated_files": stats.truncated_files,
-                "state": pipeline.summary(),
+                "state": pipeline.summary(), "outputs": written,
             });
             if args.iter().any(|a| a == "--audit") {
                 report["audit"] =

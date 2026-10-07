@@ -1,8 +1,9 @@
 //! Bounded, compressed storage for derived rows (feature snapshots, bars).
 //!
-//! Rows are gzip NDJSON in `<prefix>-<run ms>-<index>.ndjson.gz`. The open file carries a
-//! `.partial` suffix until it is rotated or the run finishes cleanly, so a crashed run never
-//! leaves a file that looks complete; sync flushes keep it readable up to the last flush.
+//! Rows are gzip NDJSON in `<prefix>-<run ms>-<pid>-<n>-<index>.ndjson.gz`. Every file of a
+//! run keeps a `.partial` suffix until the whole run finishes cleanly, so a crashed or failed
+//! run never leaves a file that looks complete; sync flushes keep the open file readable up
+//! to the last flush.
 //! Files rotate at `rotate_bytes` of uncompressed rows, and after `max_files` files the
 //! store stops writing and counts dropped rows instead of growing the disk or deleting
 //! older data. Nothing is ever overwritten.
@@ -33,12 +34,17 @@ impl Default for StoreConfig {
     }
 }
 
+/// Distinguishes stores opened by one process in the same millisecond.
+static RUN_COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 pub struct RowStore {
     dir: PathBuf,
     prefix: &'static str,
-    run_ms: u128,
+    run: String,
     config: StoreConfig,
-    open: Option<(GzEncoder<BufWriter<File>>, PathBuf)>,
+    open: Option<GzEncoder<BufWriter<File>>>,
+    /// Every file of this run, renamed only by `finish`.
+    partials: Vec<PathBuf>,
     files: u32,
     written: u64,
     pub rows: u64,
@@ -58,12 +64,14 @@ impl RowStore {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_millis())
             .unwrap_or(0);
+        let n = RUN_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         Ok(Self {
             dir: dir.to_path_buf(),
             prefix,
-            run_ms,
+            run: format!("{run_ms:013}-{}-{n}", std::process::id()),
             config,
             open: None,
+            partials: Vec::new(),
             files: 0,
             written: 0,
             rows: 0,
@@ -75,7 +83,7 @@ impl RowStore {
         let mut line = serde_json::to_vec(row).map_err(io::Error::other)?;
         line.push(b'\n');
         if self.open.is_some() && self.written >= self.config.rotate_bytes {
-            self.close()?;
+            self.close_open()?;
         }
         if self.open.is_none() {
             if self.files >= self.config.max_files {
@@ -84,7 +92,7 @@ impl RowStore {
             }
             self.open_next()?;
         }
-        if let Some((file, _)) = self.open.as_mut() {
+        if let Some(file) = self.open.as_mut() {
             file.write_all(&line)?;
         }
         self.written += line.len() as u64;
@@ -94,52 +102,47 @@ impl RowStore {
 
     /// Gzip sync flush: the `.partial` file is readable up to here after a crash.
     pub fn flush(&mut self) -> io::Result<()> {
-        if let Some((file, _)) = self.open.as_mut() {
+        if let Some(file) = self.open.as_mut() {
             file.flush()?;
             file.get_mut().flush()?;
         }
         Ok(())
     }
 
-    /// Clean end of run: the open file gets its final name.
-    pub fn finish(mut self) -> io::Result<()> {
-        self.close()
+    /// Clean end of run: every file of the run gets its final name. Returns
+    /// `(rows written, rows dropped by the file cap)`.
+    pub fn finish(mut self) -> io::Result<(u64, u64)> {
+        self.close_open()?;
+        for partial in std::mem::take(&mut self.partials) {
+            let done = partial.with_extension(""); // Strips ".partial".
+                                                   // hard_link fails if `done` exists: no check-then-rename race, no overwrite.
+            fs::hard_link(&partial, &done)?;
+            fs::remove_file(&partial)?;
+        }
+        Ok((self.rows, self.dropped_rows))
     }
 
     fn open_next(&mut self) -> io::Result<()> {
-        let name = format!(
-            "{}-{:013}-{:06}.ndjson.gz",
-            self.prefix, self.run_ms, self.files
-        );
+        let name = format!("{}-{}-{:06}.ndjson.gz", self.prefix, self.run, self.files);
         let partial = self.dir.join(format!("{name}.partial"));
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(&partial)?;
-        self.open = Some((
-            GzEncoder::new(BufWriter::new(file), Compression::fast()),
-            partial,
-        ));
+        self.open = Some(GzEncoder::new(BufWriter::new(file), Compression::fast()));
+        self.partials.push(partial);
         self.files += 1;
         self.written = 0;
         Ok(())
     }
 
-    fn close(&mut self) -> io::Result<()> {
-        let Some((file, partial)) = self.open.take() else {
+    fn close_open(&mut self) -> io::Result<()> {
+        let Some(file) = self.open.take() else {
             return Ok(());
         };
         let mut inner = file.finish()?;
         inner.flush()?;
-        inner.get_ref().sync_all()?;
-        let done = partial.with_extension(""); // Strips ".partial".
-        if done.exists() {
-            return Err(io::Error::new(
-                io::ErrorKind::AlreadyExists,
-                format!("{} exists", done.display()),
-            ));
-        }
-        fs::rename(&partial, &done)
+        inner.get_ref().sync_all()
     }
 }
 
@@ -250,13 +253,26 @@ mod tests {
         store.flush().unwrap();
         // One row per file (each row exceeds 20 bytes): 3 files, then rows are dropped.
         assert_eq!((store.rows, store.dropped_rows), (3, 7));
-        // The cap closed the third file when the fourth row arrived.
+        // Until the run finishes, nothing looks complete, even rotated files.
+        assert!(row_files(dir.path(), "rows").unwrap().is_empty());
+        assert_eq!(store.finish().unwrap(), (3, 7));
         assert_eq!(row_files(dir.path(), "rows").unwrap().len(), 3);
-        store.finish().unwrap();
         let mut open = RowStore::create(dir.path(), "open", StoreConfig::default()).unwrap();
         open.write(&1).unwrap();
         open.flush().unwrap();
         assert!(row_files(dir.path(), "open").unwrap().is_empty()); // Still `.partial`.
+                                                                    // A crash now: the flushed `.partial` decodes up to the flush.
+        let partial = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .find(|p| p.to_string_lossy().contains("open-"))
+            .unwrap();
+        let mut text = String::new();
+        let _ = std::io::Read::read_to_string(
+            &mut MultiGzDecoder::new(File::open(&partial).unwrap()),
+            &mut text,
+        );
+        assert_eq!(text, "1\n");
         open.finish().unwrap();
         assert_eq!(read_rows(dir.path(), "open").unwrap(), ["1"]);
         let rows = read_rows(dir.path(), "rows").unwrap();
@@ -267,6 +283,18 @@ mod tests {
             .map(|e| e.unwrap().file_name().into_string().unwrap())
             .collect();
         assert!(names.iter().all(|n| !n.ends_with(".partial")));
+    }
+
+    #[test]
+    fn concurrent_stores_never_collide_or_overwrite() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut a = RowStore::create(dir.path(), "rows", StoreConfig::default()).unwrap();
+        let mut b = RowStore::create(dir.path(), "rows", StoreConfig::default()).unwrap();
+        a.write(&"a").unwrap();
+        b.write(&"b").unwrap();
+        a.finish().unwrap();
+        b.finish().unwrap();
+        assert_eq!(read_rows(dir.path(), "rows").unwrap().len(), 2);
     }
 
     #[test]

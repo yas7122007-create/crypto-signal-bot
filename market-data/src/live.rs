@@ -131,8 +131,14 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
     // Every step runs even after a failure; the first error is the one reported. A failed
     // run leaves its features as `.partial`, never as a file that looks complete.
     let outputs = outputs.close(result.is_ok());
+    if let Ok(report) = &outputs {
+        eprintln!(
+            "{}",
+            serde_json::json!({"final": pipeline.summary(), "outputs": report})
+        );
+    }
     let finished = recorder.finish();
-    result.and(outputs).and(finished)
+    result.and(outputs.map(drop)).and(finished)
 }
 
 /// Bars kept per symbol in the state files (bounded; > the forecasting window).
@@ -172,14 +178,26 @@ impl Outputs {
         Ok(())
     }
 
-    /// Clean runs finalize their files; failed runs leave them `.partial`.
-    pub fn close(self, clean: bool) -> io::Result<()> {
+    /// Clean runs finalize their files; failed runs leave every file `.partial`. Returns
+    /// rows written and dropped (file cap) per output, for the final report.
+    pub fn close(self, clean: bool) -> io::Result<serde_json::Value> {
+        let mut report = serde_json::Map::new();
         let mut first = Ok(());
-        for mut store in [self.features, self.bars].into_iter().flatten() {
-            let done = if clean { store.finish() } else { store.flush() };
+        for (name, store) in [("features", self.features), ("bars", self.bars)] {
+            let Some(mut store) = store else { continue };
+            let (rows, dropped) = (store.rows, store.dropped_rows);
+            let done = if clean {
+                store.finish().map(drop)
+            } else {
+                store.flush()
+            };
             first = first.and(done);
+            report.insert(
+                name.into(),
+                serde_json::json!({"rows": rows, "dropped_rows": dropped, "finalized": clean}),
+            );
         }
-        first
+        first.map(|()| report.into())
     }
 }
 

@@ -493,3 +493,26 @@ fn throughput_on_synthetic_stream() {
     );
     assert_eq!(rows, 200_000);
 }
+
+/// The recorded config is compared field by field and parsed with `deny_unknown_fields`,
+/// so its serialized form is part of the recording format. A new field must be added with
+/// `#[serde(default)]` and a default that reproduces today's behavior, or old recordings
+/// stop verifying.
+#[test]
+fn default_feature_config_serialization_is_pinned() {
+    let value = serde_json::to_value(FeatureConfig::default()).unwrap();
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "cvd_windows_ms": [1000, 5000, 15000, 60000],
+            "obi_levels": [10, 50],
+            "trade_quiet_ms": 10000,
+            "trade_stale_ms": 120000,
+        })
+    );
+    let back: FeatureConfig = serde_json::from_value(value).unwrap();
+    assert_eq!(back, FeatureConfig::default());
+    let mut extra = serde_json::to_value(FeatureConfig::default()).unwrap();
+    extra["future_field"] = serde_json::json!(1);
+    assert!(serde_json::from_value::<FeatureConfig>(extra).is_err());
+}

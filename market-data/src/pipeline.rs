@@ -103,8 +103,20 @@ impl Pipeline {
 
     pub fn handle(&mut self, env: &Envelope) -> Step {
         self.stats.events += 1;
-        if env.kind == Kind::Connection && env.payload.get().contains("\"session_start\"") {
+        let event = (env.kind == Kind::Connection)
+            .then(|| {
+                serde_json::from_str::<Value>(env.payload.get())
+                    .ok()
+                    .and_then(|v| v.get("event").and_then(Value::as_str).map(str::to_string))
+            })
+            .flatten()
+            .unwrap_or_default();
+        if event == "session_start" {
             self.last_seq = None; // Each recorder session numbers its events from zero.
+        } else if self.stats.events == 1 {
+            // A recording that does not start with session_start (e.g. its first file is
+            // gone) carries no config to verify.
+            self.stats.config_unverified += 1;
         }
         if self.last_seq.is_some_and(|last| env.seq <= last) {
             self.stats.out_of_order_seq += 1;
@@ -179,10 +191,6 @@ impl Pipeline {
             Kind::MarkPrice => self.stats.mark_prices += 1,
             Kind::Unparsed => self.stats.unparsed += 1,
             Kind::Connection => {
-                let event = serde_json::from_str::<Value>(payload)
-                    .ok()
-                    .and_then(|v| v.get("event").and_then(Value::as_str).map(str::to_string))
-                    .unwrap_or_default();
                 if event == "session_start" {
                     // A new process: nothing per symbol carries over, so replaying many
                     // sessions yields the same rows each live run wrote.

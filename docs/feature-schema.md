@@ -2,7 +2,7 @@
 
 The contract between the Rust market-data engine and anything that consumes order-flow features: the dataset builder, the Python bridge and evaluation. It is frozen at `v = 2`. Changing a field name, type, unit or meaning requires a new version number. `market-data/tests/features.rs::schema_doc_matches_serialized_fields` fails if this table and the serialized row disagree.
 
-Rows are one JSON object per line (NDJSON), stored as rotated gzip files `features-<run ms>-<index>.ndjson.gz` (see "Storage"). Decimal values are JSON strings holding exact decimals, never floats, so no precision is lost; parse them with a decimal type or knowingly convert.
+Rows are one JSON object per line (NDJSON), stored as rotated gzip files `features-<run ms>-<pid>-<counter>-<index>.ndjson.gz` (see "Storage"). Decimal values are JSON strings holding exact decimals, never floats, so no precision is lost; parse them with a decimal type or knowingly convert.
 
 ## When a row exists
 
@@ -84,8 +84,14 @@ The feature config (windows, OBI depths, silence thresholds) is written into eac
 
 ## Storage
 
-`--features-dir DIR` writes gzip NDJSON, rotated every `--features-rotate-mb` (default 256) MB of uncompressed rows, at most `--features-max-files` (default 64) files per run. Past the cap the store stops writing and counts `feature_rows_dropped` in the status line; it never deletes older files. The file being written ends in `.partial` until rotation or a clean finish, so only complete files lack that suffix. A crashed run leaves the `.partial` file readable up to its last flush.
+`--features-dir DIR` writes gzip NDJSON, rotated every `--features-rotate-mb` (default 256) MB of uncompressed rows, at most `--features-max-files` (default 64) files per run. Past the cap the store stops writing and counts `feature_rows_dropped` in the status line and the final summary; it never deletes older files. `market-data replay` fails when any row was dropped, because its output would be incomplete.
+
+Every file of a run, rotated ones included, keeps the `.partial` suffix until the run finishes cleanly; only then are all of them renamed together. So a file without the suffix always belongs to a complete run, and a crashed or failed run leaves only `.partial` files. File names carry the run's start time, process id and a counter, and finished files are linked into place without replacing an existing name, so two concurrent runs in one directory never overwrite each other.
+
+The live recorder flushes the gzip streams every 10 s. A flush is not an fsync: after a crash a `.partial` file is readable up to its last flush that reached the disk, and the trailing gzip member may be cut short.
 
 ## Session boundaries
 
-`session_start` clears all per-symbol state: replaying a directory with several runs yields, for each run, exactly the rows that run wrote live. `seq` restarts per session; `(session_id, seq)` identifies a row.
+`session_start` clears all per-symbol trade state, the open bars and the books' sync epochs: replaying a directory with several runs yields, for each run, exactly the rows that run wrote live. It does not clear the cumulative sync counters reported in `books.*.stats` (they describe the whole replay) or the last depth receive time used for the 30 s depth staleness rule, which is harmless because every book is reset to unsynced and needs a new snapshot anyway. `seq` restarts per session; `(session_id, seq)` identifies a row.
+
+A depth snapshot that arrives while the book is already synced is ignored but still yields a row from the unchanged book, so consecutive rows can repeat `book_update_id`.

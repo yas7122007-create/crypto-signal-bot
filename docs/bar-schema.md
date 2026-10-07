@@ -40,5 +40,5 @@ Consumers must not use incomplete bars as model input or targets.
 
 ## Files
 
-- `--bars-dir DIR` (record and replay): rotated gzip NDJSON `bars-<run ms>-<index>.ndjson.gz`, with the same `.partial` and cap rules as feature files.
+- `--bars-dir DIR` (record and replay): rotated gzip NDJSON `bars-<run ms>-<pid>-<counter>-<index>.ndjson.gz`, with the same `.partial` and cap rules as feature files.
 - `--state-dir DIR` (record): `DIR/<SYMBOL>.json` = `{"v":1,"kind":"bar_window","symbol":...,"bars":[...]}` with the latest 256 bars of the current session, replaced atomically (temporary file plus rename) at every bar close. This is the live input of the Python bridge, which rejects it when stale.
