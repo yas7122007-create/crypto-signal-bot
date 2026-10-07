@@ -3,6 +3,7 @@ from dataclasses import asdict
 from contextlib import redirect_stderr
 from io import StringIO
 import json
+from textwrap import dedent as textwrap_dedent
 from pathlib import Path
 import subprocess
 from tempfile import TemporaryDirectory
@@ -313,6 +314,61 @@ def v2_bridge_checks(candidate):
     ev = reasoning.evidence(candidate, {})
     assert ev["forecast"]["toto"] == "NOT_AVAILABLE"
     print("PASS: V2_MODE off/shadow/on, invalid mode rejected, bridge failures degrade to NOT_AVAILABLE")
+    toto_evidence_checks(candidate)
+
+
+def toto_evidence_checks(candidate):
+    """Phase 5: toto_evidence() stays NOT_AVAILABLE off or unconfigured, and actually
+    reaches a real CONFIRM/REJECT through v2.toto.validate() + a worker subprocess once
+    V2_TOTO_WORKER_CMD and a state file are configured and the forecast is ok."""
+    import json as _json
+    import os
+    import sys
+    import tempfile
+    import reasoning
+    ok_forecast = dict(status="ok", asof_ms=1, expected_return_bps=3.0, sigma_bps=10.0, p_up=0.8)
+    with patch.dict("os.environ", {}, clear=False):
+        os.environ.pop("V2_MODE", None)
+        assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
+    with patch.dict("os.environ", {"V2_MODE": "on"}):
+        # No V2_TOTO_WORKER_CMD/V2_STATE_DIR: fails closed, no crash.
+        assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
+        assert reasoning.toto_evidence(candidate, {"status": "unavailable"}, 0) == "NOT_AVAILABLE"
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        print("PASS: toto_evidence off/unconfigured (numpy absent: worker path skipped)")
+        return
+    worker = textwrap_dedent("""
+        import json, sys
+        payload = json.load(sys.stdin)
+        print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8}))
+    """)
+    with tempfile.TemporaryDirectory() as d:
+        script = os.path.join(d, "worker.py")
+        with open(script, "w") as f:
+            f.write(worker)
+        state_dir = os.path.join(d, "state")
+        os.makedirs(state_dir)
+        bars = [dict(v=1, feature_v=2, symbol=candidate["symbol"], session_id=1,
+                    start_ms=i * 60_000, end_ms=(i + 1) * 60_000, rows=10, complete=True,
+                    incomplete_reason=None, synced_since_seq=1, close_seq=i,
+                    open_mid="100", high_mid="101", low_mid="99", close_mid="100",
+                    close_microprice="100", mean_spread_bps="1", close_spread_bps="1",
+                    close_obi=[{"levels": 10, "value": "0.1"}], close_trade_state="active",
+                    buy_qty="1", sell_qty="1") for i in range(3)]
+        with open(os.path.join(state_dir, f"{candidate['symbol']}.json"), "w") as f:
+            _json.dump(dict(v=1, kind="bar_window", symbol=candidate["symbol"], bars=bars), f)
+        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}):
+            result = reasoning.toto_evidence(candidate, ok_forecast, 0)
+            assert isinstance(result, dict) and result["status"] == "ok" and result["decision"] == "CONFIRM", result
+        # A worker that fails degrades to NOT_AVAILABLE, never a crash or a fabricated CONFIRM.
+        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} -c exit(1)"}):
+            failed = reasoning.toto_evidence(candidate, ok_forecast, 0)
+            assert failed == "NOT_AVAILABLE" or failed.get("status") == "unavailable", failed
+    print("PASS: toto_evidence off/unconfigured degrades to NOT_AVAILABLE; a configured worker reaches a real CONFIRM")
 
 
 def scan_checks(candidate, rules):

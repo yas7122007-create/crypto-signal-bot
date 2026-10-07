@@ -10,12 +10,14 @@ Binance Futures WebSocket
   -> Local L2 order book                      Phase 1   sync implemented
   -> Order-flow engine (CVD, OBI, microprice) Phase 2   implemented; live Binance run not yet verified
   -> Recorder + deterministic replay          Phase 3   implemented (gzip NDJSON)
-  -> Python/Rust interface                    Phase 4   not started (gRPC only if justified)
-  -> Feature engine + data-quality checks     Phase 5   not started
-  -> PatchTST forecasting                     Phase 6   not started
+  -> Python/Rust interface                    Phase 4   implemented (v2/bridge.py); not wired into bot.scan()
+  -> PatchTST forecasting                     Phase 3   implemented offline (v2/patchtst.py); behind V2_MODE in reasoning.py
   -> Deterministic strategy / risk gate       existing  engine.py, validate_market
-  -> Toto final validation                    Phase 7   not started
-  -> Nemotron reasoning / explanation         Phase 8   implemented on current evidence (reasoning.py)
+  -> Toto final validation                    Phase 5   implemented (v2/toto.py); no real model available here (needs HuggingFace + a conflicting torch version); wired behind V2_MODE + V2_TOTO_WORKER_CMD
+  -> Nemotron reasoning / explanation         existing  advisory, implemented (reasoning.explain)
+  -> Nemotron CONFIRM/HOLD gate               Phase 5B  implemented (reasoning.confirm_gate); not called anywhere yet
+  -> Deterministic ranking (max 3)            Phase 6   implemented (v2/ranking.py); not wired into bot.scan()
+  -> Paper evaluation journal + metrics       Phase 7   implemented (v2/evaluate.py); not wired into bot.scan()
   -> Fresh market revalidation -> paper signal -> Telegram / observability (Phase 9)
 ```
 
@@ -76,8 +78,8 @@ Computed in `market-data/src/features.rs` inside the one `Pipeline` that both li
 
 **Output, integrity, staleness.** Frozen in [feature-schema.md](feature-schema.md) (schema v2): rotated gzip storage with a file cap, the feature config recorded in `session_start` and enforced by replay, and `trade_state` so a stalled trade stream withholds CVD instead of reporting zeros.
 
-**Known limits.** Trade silence thresholds are a policy, not proof of a stall. Features are not yet consumed by Python (Phase 4).
+**Known limits.** Trade silence thresholds are a policy, not proof of a stall. Features are consumed by Python only via v2/bridge.py (Phase 4), behind V2_MODE; the live bot.scan() loop does not call it yet.
 
 ## Current Nemotron evidence
 
-`reasoning.evidence()` sends the engine features, entry/SL/TP, market gate output, rules and journal summary. `forecast.patchtst` and `forecast.toto` are `NOT_AVAILABLE` until Phases 6 and 7 land; the prompt forbids inventing them.
+`reasoning.evidence()` sends the engine features, entry/SL/TP, market gate output, rules and journal summary, plus `forecast.patchtst` (Phase 4's bridge) and `forecast.toto` (Phase 5's validator). Both default to the string `"NOT_AVAILABLE"` when `V2_MODE` (env var, default `"off"`) is off, or when the required configuration (`V2_STATE_DIR`, `V2_MODEL_DIR`, `V2_TOTO_WORKER_CMD`) is not set -- which is the case everywhere today, since no real PatchTST deployment or Toto worker exists outside tests. See docs/forecasting.md for the full Phase 3-7 design, what is and is not wired into the live `bot.scan()` loop, and the explicit conflict Phase 5B's CONFIRM/HOLD gate raises against this document's own "Nemotron... never overrides" rule above -- flagged there for the project owner/Astra, not resolved by this document.

@@ -82,16 +82,51 @@ def patchtst_forecast(candidate, now_ms):
         return "NOT_AVAILABLE"
 
 
+def toto_evidence(candidate, forecast, now_ms):
+    """Phase 5 validator call, gated the same way as patchtst_forecast(): V2_MODE="off"
+    (the default) always returns the "NOT_AVAILABLE" string, with no import or filesystem
+    access attempted. "shadow"/"on" call v2.toto.validate() with a WorkerAdapter built from
+    V2_TOTO_WORKER_CMD -- there is no real Toto model available in this environment (see
+    docs/forecasting.md), so with V2_TOTO_WORKER_CMD unset this also stays "NOT_AVAILABLE";
+    it is wired for whenever a real worker command is configured. Never raises; any failure
+    degrades to "NOT_AVAILABLE", same as patchtst_forecast()."""
+    if v2_mode() == "off":
+        return "NOT_AVAILABLE"
+    worker_cmd = os.getenv("V2_TOTO_WORKER_CMD", "").strip()
+    state_dir = os.getenv("V2_STATE_DIR", "").strip()
+    if not worker_cmd or not state_dir or not isinstance(forecast, dict) or forecast.get("status") != "ok":
+        return "NOT_AVAILABLE"
+    try:
+        import shlex
+        from v2 import bridge as v2_bridge
+        from v2 import toto as v2_toto
+    except ImportError:
+        return "NOT_AVAILABLE"  # numpy not installed on this host.
+    try:
+        _, bars = v2_bridge.read_state(os.path.join(state_dir, f"{candidate['symbol']}.json"))
+        timeout_s = int(bounded("V2_TOTO_TIMEOUT_SECONDS", "20", 1, 120))
+        adapter = v2_toto.WorkerAdapter(shlex.split(worker_cmd), timeout_s=timeout_s)
+        import hashlib
+        version = hashlib.sha256(worker_cmd.encode()).hexdigest()[:16]
+        return v2_toto.validate(candidate["symbol"], forecast["asof_ms"], bars, forecast, adapter,
+                                model_version=version)
+    except Exception as exc:  # Any bridge failure is NOT_AVAILABLE, never a crash or a value.
+        LOG.warning("v2 toto bridge gagal: %s", safe_error(exc))
+        return "NOT_AVAILABLE"
+
+
 def evidence(candidate, history, now_ms=None):
     keys = ("symbol", "action", "setup", "regime", "universe_group", "candle_ms", "entry", "stop",
             "target", "atr", "reason", "features", "market", "rules", "version")
-    forecast = patchtst_forecast(candidate, now_ms if now_ms is not None else int(time.time() * 1000))
+    now_ms = now_ms if now_ms is not None else int(time.time() * 1000)
+    forecast = patchtst_forecast(candidate, now_ms)
+    toto = toto_evidence(candidate, forecast, now_ms)
     return {"decision": "PASSED_DETERMINISTIC_GATES",
             "candidate": {k: candidate[k] for k in keys if k in candidate},
             "journal": history,
-            # V2_MODE=off (default): unchanged from V1. shadow/on: Phase 4 bridge result.
-            # Toto (Phase 5) is still NOT_AVAILABLE until that phase lands.
-            "forecast": {"patchtst": forecast, "toto": "NOT_AVAILABLE"}}
+            # V2_MODE=off (default): both unchanged from V1. shadow/on: Phase 4/5 results,
+            # "NOT_AVAILABLE" unless the required env (state/model dir, Toto worker cmd) is set.
+            "forecast": {"patchtst": forecast, "toto": toto}}
 
 
 def parse_result(text):

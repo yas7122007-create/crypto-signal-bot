@@ -34,19 +34,23 @@ class BridgeConfig:
 
 
 def _load_model(model_dir):
-    """Cached by resolved path; a process loads each model directory's weights once."""
+    """Cached by resolved path once a load succeeds (a process then reuses those weights
+    for its lifetime). A failed load is never cached: model files mid-write, or a transient
+    OSError, must not pin "unavailable" for the rest of the process once they become valid
+    -- only a successful Forecaster.load is treated as a fact that cannot change."""
     key = str(Path(model_dir).resolve())
-    if key not in _MODEL_CACHE:
-        try:
-            from v2.patchtst import Forecaster
-        except ImportError:
-            _MODEL_CACHE[key] = None
-        else:
-            try:
-                _MODEL_CACHE[key] = Forecaster.load(model_dir)
-            except (OSError, ValueError, json.JSONDecodeError, KeyError):
-                _MODEL_CACHE[key] = None
-    return _MODEL_CACHE[key]
+    if key in _MODEL_CACHE:
+        return _MODEL_CACHE[key]
+    try:
+        from v2.patchtst import Forecaster
+    except ImportError:
+        return None  # Not cached either: a future call in the same process still checks.
+    try:
+        model = Forecaster.load(model_dir)
+    except (OSError, ValueError, json.JSONDecodeError, KeyError):
+        return None
+    _MODEL_CACHE[key] = model
+    return model
 
 
 def _unavailable(symbol, asof_ms, horizon_ms, spec, reason):
