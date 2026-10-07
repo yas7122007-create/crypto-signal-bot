@@ -114,5 +114,76 @@ class ValidateFailClosed(unittest.TestCase):
                          ("REJECT", "obi_direction_disagrees"))
 
 
+class ModelVersionProvenance(unittest.TestCase):
+    """Hardening 8 (adversarial-audit corrective pass): model_version must track the real
+    model artifact, not just the launch command string."""
+
+    def setUp(self):
+        self.bars = [validate_bar(b) for b in raw_bars(5)]
+
+    def worker_script(self, model_version):
+        return textwrap.dedent(f"""
+            import json, sys
+            json.load(sys.stdin)
+            print(json.dumps({{"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8,
+                               "model_version": {model_version!r}}}))
+        """)
+
+    def run_with(self, model_version, path):
+        with open(path, "w") as f:
+            f.write(self.worker_script(model_version))
+        adapter = T.WorkerAdapter([sys.executable, str(path)], timeout_s=10)
+        return T.validate("BTCUSDT", 1, self.bars, OK_FORECAST, adapter=adapter,
+                          model_version="fallback-command-hash")
+
+    def test_same_command_different_worker_revision_yields_different_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            # Two different worker scripts (standing in for two different model
+            # checkpoints) launched via what reasoning.toto_evidence() would treat as the
+            # "same command" (same executable, same script path/argv shape) -- the
+            # worker's own reported identity, not the command, decides the version.
+            path = Path(d) / "worker.py"
+            r1 = self.run_with("weights-sha256-aaaa", path)
+            r2 = self.run_with("weights-sha256-bbbb", path)
+            self.assertEqual(r1["model_version"], "weights-sha256-aaaa")
+            self.assertEqual(r2["model_version"], "weights-sha256-bbbb")
+            self.assertNotEqual(r1["model_version"], r2["model_version"])
+
+    def test_missing_or_invalid_worker_version_falls_back_to_callers_version(self):
+        with tempfile.TemporaryDirectory() as d:
+            script = textwrap.dedent("""
+                import json, sys
+                json.load(sys.stdin)
+                print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8}))
+            """)
+            path = Path(d) / "worker.py"
+            path.write_text(script)
+            adapter = T.WorkerAdapter([sys.executable, str(path)], timeout_s=10)
+            r = T.validate("BTCUSDT", 1, self.bars, OK_FORECAST, adapter=adapter,
+                           model_version="fallback-command-hash")
+            self.assertEqual(r["model_version"], "fallback-command-hash")
+            # A non-string or blank reported version is rejected the same way, never passed
+            # through as-is -- the contract requires model_version to be a real string.
+            for bad in (123, "", "   "):
+                script_bad = textwrap.dedent(f"""
+                    import json, sys
+                    json.load(sys.stdin)
+                    print(json.dumps({{"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8,
+                                       "model_version": {bad!r}}}))
+                """)
+                path.write_text(script_bad)
+                r = T.validate("BTCUSDT", 1, self.bars, OK_FORECAST, adapter=adapter,
+                               model_version="fallback-command-hash")
+                self.assertEqual(r["model_version"], "fallback-command-hash")
+
+    def test_fake_adapter_never_reports_a_model_version(self):
+        """FakeAdapter must stay an explicitly-marked test stand-in: it never claims a real
+        model identity, so it can never fall into the "reported" branch above and be
+        mistaken for real Toto provenance."""
+        r = T.validate("BTCUSDT", 1, self.bars, OK_FORECAST, adapter=T.FakeAdapter(),
+                       model_version="caller-default")
+        self.assertEqual(r["model_version"], "caller-default")
+
+
 if __name__ == "__main__":
     unittest.main()

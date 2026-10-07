@@ -23,7 +23,16 @@ MODEL_NAME = "toto"
 class Adapter:
     """validate(bars, forecast) -> dict with decision, p_up, confidence, and, on REJECT (or
     optionally CONFIRM), disagreement_reason -- the raw fields `contracts.toto()` wraps. Must
-    not raise for a disagreement; raise only for a genuine failure (`validate()` catches it)."""
+    not raise for a disagreement; raise only for a genuine failure (`validate()` catches it).
+
+    Optional `model_version` key (Hardening 8, adversarial-audit corrective pass): a real
+    adapter SHOULD include its own model identity here -- a weight hash, manifest digest, or
+    revision string that changes whenever the underlying model artifact does -- and
+    `validate()` below uses it in place of whatever static version its caller supplied.
+    Without one, `validate()` falls back to the caller's version (e.g. a hash of the launch
+    command), which identifies the *invocation*, not the *model*: a changed checkpoint behind
+    an unchanged command would silently keep the old version. `FakeAdapter` deliberately never
+    sets this, so it can never be mistaken for a real model's provenance."""
 
     def validate(self, bars, forecast):
         raise NotImplementedError
@@ -81,8 +90,14 @@ def validate(symbol, asof_ms, bars, forecast, adapter, model_version="unavailabl
         return C.toto(symbol, asof_ms, MODEL_NAME, model_version, reason="adapter_failed")
     if not isinstance(result, dict) or result.get("decision") not in C.DECISIONS:
         return C.toto(symbol, asof_ms, MODEL_NAME, model_version, reason="invalid_output")
+    # Hardening 8: prefer the adapter's own reported model identity over the caller's
+    # static fallback, so a changed model artifact behind the same launch command is
+    # reported as a different version. Only a non-empty string is trusted; anything else
+    # (missing, not a string, blank) keeps the caller's version unchanged.
+    reported = result.get("model_version")
+    version = reported if isinstance(reported, str) and reported.strip() else model_version
     try:
-        return C.toto(symbol, asof_ms, MODEL_NAME, model_version, decision=result["decision"],
+        return C.toto(symbol, asof_ms, MODEL_NAME, version, decision=result["decision"],
                       p_up=result.get("p_up"), confidence=result.get("confidence"),
                       disagreement_reason=result.get("disagreement_reason"))
     except C.ContractError:

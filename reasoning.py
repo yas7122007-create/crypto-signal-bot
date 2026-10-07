@@ -107,9 +107,14 @@ def toto_evidence(candidate, forecast, now_ms):
         timeout_s = int(bounded("V2_TOTO_TIMEOUT_SECONDS", "20", 1, 120))
         adapter = v2_toto.WorkerAdapter(shlex.split(worker_cmd), timeout_s=timeout_s)
         import hashlib
-        version = hashlib.sha256(worker_cmd.encode()).hexdigest()[:16]
+        # Hardening 8: this is only a fallback identifying the *launch command*, used when
+        # the worker does not report its own model identity. v2_toto.validate() prefers a
+        # "model_version" the worker's own JSON reply provides (a real weight hash/manifest
+        # digest/revision) over this value, so a changed checkpoint behind an unchanged
+        # command is not silently reported as the same version.
+        fallback_version = hashlib.sha256(worker_cmd.encode()).hexdigest()[:16]
         return v2_toto.validate(candidate["symbol"], forecast["asof_ms"], bars, forecast, adapter,
-                                model_version=version)
+                                model_version=fallback_version)
     except Exception as exc:  # Any bridge failure is NOT_AVAILABLE, never a crash or a value.
         LOG.warning("v2 toto bridge gagal: %s", safe_error(exc))
         return "NOT_AVAILABLE"
