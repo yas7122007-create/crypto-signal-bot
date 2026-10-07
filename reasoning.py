@@ -131,18 +131,12 @@ def toto_evidence(candidate, forecast, now_ms):
         _, bars = v2_bridge.read_state(os.path.join(state_dir, f"{candidate['symbol']}.json"))
         timeout_s = int(bounded("V2_TOTO_TIMEOUT_SECONDS", "20", 1, 120))
         adapter = v2_toto.WorkerAdapter(shlex.split(worker_cmd), timeout_s=timeout_s)
-        import hashlib
-        # Hardening 8: this is only a fallback identifying the *launch command*, used when
-        # the worker does not report its own model identity. v2_toto.validate() prefers a
-        # "model_version" the worker's own JSON reply provides (a real weight hash/manifest
-        # digest/revision) over this value, so a changed checkpoint behind an unchanged
-        # command is not silently reported as the same version.
-        fallback_version = hashlib.sha256(worker_cmd.encode()).hexdigest()[:16]
-        # Fix 6: the same single-heavy-job gate as patchtst_forecast(); under pressure Toto
-        # (the secondary opinion) is the one skipped first.
+        # The model identity comes only from the worker's own reply (v2.toto.validate()
+        # rejects a result without a valid immutable one); V2_TOTO_WORKER_CMD identifies the
+        # process, never the checkpoint, so it is deliberately not passed as a version.
         ran, result = resource_gate.guarded(
             "toto", lambda: v2_toto.validate(candidate["symbol"], forecast["asof_ms"], bars,
-                                             forecast, adapter, model_version=fallback_version))
+                                             forecast, adapter))
         if not ran:
             LOG.info("v2 toto dilewati: %s", result)
             return "NOT_AVAILABLE"

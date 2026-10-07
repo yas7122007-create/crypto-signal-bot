@@ -399,7 +399,8 @@ def toto_evidence_checks(candidate):
     worker = textwrap_dedent("""
         import json, sys
         payload = json.load(sys.stdin)
-        print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8}))
+        print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8,
+                          "model_version": "sha256:" + "c" * 64}))
     """)
     with tempfile.TemporaryDirectory() as d:
         script = os.path.join(d, "worker.py")
@@ -420,6 +421,17 @@ def toto_evidence_checks(candidate):
                                        "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}):
             result = reasoning.toto_evidence(candidate, ok_forecast, 0)
             assert isinstance(result, dict) and result["status"] == "ok" and result["decision"] == "CONFIRM", result
+            assert result["model_version"] == "sha256:" + "c" * 64, result
+        # Final hardening, Finding 2: the same worker command without a model identity in its
+        # reply is never an ok Toto result -- the command is not a substitute for the model.
+        anonymous = os.path.join(d, "anonymous.py")
+        with open(anonymous, "w") as f:
+            f.write("import json, sys\njson.load(sys.stdin)\n"
+                    'print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8}))\n')
+        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} {anonymous}"}):
+            missing = reasoning.toto_evidence(candidate, ok_forecast, 0)
+            assert missing["status"] == "unavailable" and missing["reason"] == "model_version_missing", missing
         # Fix 1: the same, via evidence() under "shadow" (not just "on") -- shadow mode can
         # get a real Toto evidence result, and it only ever lands in evidence()["forecast"],
         # which feeds nothing but Nemotron's advisory explain(); engine.analyze() cannot see
