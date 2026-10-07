@@ -17,7 +17,7 @@ use tokio_tungstenite::tungstenite::Message;
 use crate::binance::{
     envelope_from_snapshot, envelope_from_stream, snapshot_url, stream_url, unparsed,
 };
-use crate::event::{connection, now_ns, Envelope};
+use crate::event::{connection, now_ns, session_start, Envelope};
 use crate::features::FeatureConfig;
 use crate::pipeline::{Action, Pipeline};
 use crate::recorder::{FeatureWriter, Recorder};
@@ -65,13 +65,12 @@ pub async fn run_until(cfg: Config, shutdown: impl Future<Output = ()>) -> io::R
         .map(FeatureWriter::create)
         .transpose()?;
     let mut pipeline = Pipeline::new(cfg.features.clone());
-    // The feature config travels with the recording, so a replay can be checked against it.
-    let detail = format!(
-        "market-data record cvd_windows_ms={:?} obi_levels={:?}",
-        cfg.features.cvd_windows_ms(),
-        cfg.features.obi_levels()
-    );
-    pipeline.handle(&recorder.record(connection("session_start", &detail, now_ns()))?);
+    // The feature config travels with the recording, so replay can verify it.
+    pipeline.handle(&recorder.record(session_start(
+        "market-data record",
+        &cfg.features,
+        now_ns(),
+    ))?);
 
     let tasks = [
         tokio::spawn(websocket(cfg.clone(), tx.clone())),

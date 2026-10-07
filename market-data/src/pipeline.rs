@@ -11,7 +11,8 @@ use crate::binance::{parse_agg_trade, parse_depth, parse_snapshot};
 use crate::book::{DepthSync, SyncEvent};
 use crate::event::{Envelope, Kind};
 use crate::features::{
-    book_features, FeatureConfig, FeatureSnapshot, TradeFlow, TradeOutcome, FEATURE_SCHEMA_VERSION,
+    book_features, FeatureConfig, FeatureSnapshot, TradeFlow, TradeOutcome, TradeState,
+    FEATURE_SCHEMA_VERSION,
 };
 
 pub const MAX_AUDIT: usize = 1_000;
@@ -35,9 +36,21 @@ pub struct Step {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum AuditEvent {
     Book(SyncEvent),
-    TradeGap { expected: u64, got: u64 },
-    Malformed { kind: Kind, error: String },
-    Connection { event: String },
+    TradeGap {
+        expected: u64,
+        got: u64,
+    },
+    Malformed {
+        kind: Kind,
+        error: String,
+    },
+    Connection {
+        event: String,
+    },
+    /// The recording was made with a different feature configuration than this pipeline.
+    ConfigMismatch {
+        recorded: Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -56,6 +69,10 @@ pub struct PipelineStats {
     pub malformed: u64,
     pub out_of_order_seq: u64,
     pub feature_rows: u64,
+    /// Sessions whose recorded feature config differs from this pipeline's.
+    pub config_mismatch: u64,
+    /// Sessions recorded without a feature config (older recordings): not checkable.
+    pub config_unverified: u64,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -64,6 +81,7 @@ pub struct Pipeline {
     books: BTreeMap<String, DepthSync>,
     trades: BTreeMap<String, TradeFlow>,
     synced_since: BTreeMap<String, u64>,
+    session_id: Option<i64>,
     audit: VecDeque<AuditEntry>,
     last_seq: Option<u64>,
     last_depth_ns: BTreeMap<String, i64>,
@@ -165,6 +183,8 @@ impl Pipeline {
                     // sessions yields the same rows each live run wrote.
                     self.trades.clear();
                     self.synced_since.clear();
+                    self.session_id = Some(env.recv_ts_ns);
+                    self.check_config(env, payload);
                 }
                 if event == "disconnected" || event == "session_start" {
                     for (symbol, book) in self.books.iter_mut() {
@@ -187,6 +207,23 @@ impl Pipeline {
         Step { actions, feature }
     }
 
+    fn check_config(&mut self, env: &Envelope, payload: &str) {
+        let recorded = serde_json::from_str::<Value>(payload)
+            .ok()
+            .and_then(|v| v.get("feature_config").cloned());
+        match recorded {
+            None => self.stats.config_unverified += 1,
+            Some(recorded) => {
+                let same = serde_json::from_value::<FeatureConfig>(recorded.clone())
+                    .is_ok_and(|c| c == self.config);
+                if !same {
+                    self.stats.config_mismatch += 1;
+                    self.push(env, AuditEvent::ConfigMismatch { recorded });
+                }
+            }
+        }
+    }
+
     /// Only a depth event that parsed may move the feature clock (it never moves back).
     fn depth_clock(&mut self, env: &Envelope) {
         let flow = self.flow(&env.symbol);
@@ -207,9 +244,19 @@ impl Pipeline {
         let sync = self.books.get(&env.symbol)?;
         let book = book_features(sync.book()?, self.config.obi_levels())?;
         let flow = self.trades.get(&env.symbol)?;
+        let (quiet, stale) = self.config.trade_silence_ms();
+        let trade_state = flow.trade_state(quiet, stale);
+        // A stale stream may be missing trades: withhold flow instead of reporting zeros.
+        let fresh = trade_state != TradeState::Stale;
+        let epoch = |v: Decimal| (fresh && flow.cvd_since_ms.is_some()).then(|| v.normalize());
+        let mut deltas = flow.deltas();
+        if !fresh {
+            deltas.iter_mut().for_each(|d| d.delta = None);
+        }
         Some(FeatureSnapshot {
             v: FEATURE_SCHEMA_VERSION,
             symbol: env.symbol.clone(),
+            session_id: self.session_id,
             seq: env.seq,
             recv_ts_ns: env.recv_ts_ns,
             exchange_ts_ms: env.exchange_ts_ms,
@@ -217,9 +264,12 @@ impl Pipeline {
             book_update_id: sync.last_update_id()?,
             synced_since_seq: self.synced_since.get(&env.symbol).copied()?,
             book,
-            cvd: flow.epoch_cvd(),
+            trade_state,
+            cvd: flow.epoch_cvd().filter(|_| fresh),
             cvd_since_ms: flow.cvd_since_ms,
-            deltas: flow.deltas(),
+            buy_qty: epoch(flow.epoch_buy_qty),
+            sell_qty: epoch(flow.epoch_sell_qty),
+            deltas,
             last_trade_ms: flow.last_trade_ms,
             trade_gaps: flow.gaps,
         })

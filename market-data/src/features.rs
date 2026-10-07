@@ -10,12 +10,13 @@
 use std::collections::VecDeque;
 
 use rust_decimal::{Decimal, RoundingStrategy};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::binance::AggTrade;
 use crate::book::OrderBook;
 
-pub const FEATURE_SCHEMA_VERSION: u16 = 1;
+/// Frozen contract: `docs/feature-schema.md`. Bump on any change of field set or meaning.
+pub const FEATURE_SCHEMA_VERSION: u16 = 2;
 /// Trades kept per symbol for rolling windows. Past this the oldest trade is evicted and
 /// windows that still needed it report `None` until they are fully covered again.
 pub const MAX_WINDOW_TRADES: usize = 100_000;
@@ -28,20 +29,30 @@ pub const MAX_OBI_LEVELS: usize = 500;
 /// finer than any USD-M tick size.
 pub const DIV_DP: u32 = 16;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Everything that changes feature values. Recorded in each `session_start`, so replay can
+/// refuse a recording made with a different configuration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FeatureConfig {
     /// Rolling CVD windows, ascending, unique (only `new` and `default` construct this).
     cvd_windows_ms: Vec<i64>,
     /// OBI depths in price levels per side, ascending, unique.
     obi_levels: Vec<usize>,
+    /// Trade silence up to this is `active`; beyond it `quiet` (a real lull).
+    trade_quiet_ms: i64,
+    /// Trade silence beyond this while depth keeps flowing is `stale`: CVD is withheld.
+    trade_stale_ms: i64,
 }
 
 impl Default for FeatureConfig {
     /// PRD V2.1: CVD over 1 s, 5 s, 15 s and 1 m; OBI over the top 10 and top 50 levels.
+    /// Trade silence: active up to 10 s, stale after 120 s (tune per symbol liquidity).
     fn default() -> Self {
         Self {
             cvd_windows_ms: vec![1_000, 5_000, 15_000, 60_000],
             obi_levels: vec![10, 50],
+            trade_quiet_ms: 10_000,
+            trade_stale_ms: 120_000,
         }
     }
 }
@@ -69,10 +80,34 @@ impl FeatureConfig {
         {
             return Err(format!("CVD windows must be 1..={MAX_WINDOW_MS} ms"));
         }
+        let defaults = Self::default();
         Ok(Self {
             cvd_windows_ms,
             obi_levels,
+            trade_quiet_ms: defaults.trade_quiet_ms,
+            trade_stale_ms: defaults.trade_stale_ms,
         })
+    }
+
+    pub fn with_trade_silence(mut self, quiet_ms: i64, stale_ms: i64) -> Result<Self, String> {
+        if !(1..stale_ms).contains(&quiet_ms) || stale_ms > MAX_WINDOW_MS {
+            return Err(format!(
+                "trade silence thresholds need 0 < quiet < stale <= {MAX_WINDOW_MS} ms"
+            ));
+        }
+        self.trade_quiet_ms = quiet_ms;
+        self.trade_stale_ms = stale_ms;
+        Ok(self)
+    }
+
+    /// Validates a deserialized config with the same rules as construction.
+    pub fn validated(self) -> Result<Self, String> {
+        Self::new(self.cvd_windows_ms, self.obi_levels)?
+            .with_trade_silence(self.trade_quiet_ms, self.trade_stale_ms)
+    }
+
+    pub fn trade_silence_ms(&self) -> (i64, i64) {
+        (self.trade_quiet_ms, self.trade_stale_ms)
     }
 
     pub fn cvd_windows_ms(&self) -> &[i64] {
@@ -173,6 +208,8 @@ fn cumulative_qty(
 pub struct FeatureSnapshot {
     pub v: u16,
     pub symbol: String,
+    /// `recv_ts_ns` of the `session_start` that opened this recording session.
+    pub session_id: Option<i64>,
     /// Recorder sequence of the depth event behind this row (joins to the recording).
     pub seq: u64,
     pub recv_ts_ns: i64,
@@ -184,8 +221,13 @@ pub struct FeatureSnapshot {
     pub synced_since_seq: u64,
     #[serde(flatten)]
     pub book: BookFeatures,
+    pub trade_state: TradeState,
+    /// `None` when there is no epoch or the trade stream is stale.
     pub cvd: Option<Decimal>,
     pub cvd_since_ms: Option<i64>,
+    pub buy_qty: Option<Decimal>,
+    pub sell_qty: Option<Decimal>,
+    /// Every delta is `None` when the trade stream is stale.
     pub deltas: Vec<WindowDelta>,
     pub last_trade_ms: Option<i64>,
     pub trade_gaps: u64,
@@ -206,6 +248,19 @@ fn div(numerator: Decimal, denominator: Decimal) -> Option<Decimal> {
 pub struct WindowDelta {
     pub window_ms: i64,
     pub delta: Option<Decimal>,
+}
+
+/// Health of the trade stream at the feature clock, measured as exchange-time silence since
+/// the epoch's last trade. Silence alone cannot prove a stall, so `quiet` (a plausible lull)
+/// keeps reporting CVD while `stale` withholds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TradeState {
+    /// No trade in the current epoch (just started, reconnected or after a gap).
+    None,
+    Active,
+    Quiet,
+    Stale,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -242,6 +297,11 @@ pub struct TradeFlow {
     pub last_trade_ms: Option<i64>,
     pub cvd: Decimal,
     pub cvd_since_ms: Option<i64>,
+    /// Aggressor buy and sell quantity in the current epoch (volume = buy + sell).
+    pub epoch_buy_qty: Decimal,
+    pub epoch_sell_qty: Decimal,
+    /// Trade time of the current epoch's latest trade.
+    pub epoch_last_trade_ms: Option<i64>,
     #[serde(skip)]
     windows_ms: Vec<i64>,
     /// Feature clock: latest exchange time seen on this symbol (trade `T`, depth `E`).
@@ -274,6 +334,9 @@ impl TradeFlow {
             last_trade_ms: None,
             cvd: Decimal::ZERO,
             cvd_since_ms: None,
+            epoch_buy_qty: Decimal::ZERO,
+            epoch_sell_qty: Decimal::ZERO,
+            epoch_last_trade_ms: None,
             windows_ms: windows_ms.to_vec(),
             clock_ms: None,
             covered_from_ms: None,
@@ -303,11 +366,14 @@ impl TradeFlow {
         self.last_trade_ms = Some(trade.trade_ms);
         let signed = if trade.buyer_is_maker {
             self.aggressive_sell_qty += trade.qty;
+            self.epoch_sell_qty += trade.qty;
             -trade.qty
         } else {
             self.aggressive_buy_qty += trade.qty;
+            self.epoch_buy_qty += trade.qty;
             trade.qty
         };
+        self.epoch_last_trade_ms = Some(trade.trade_ms);
         if self.cvd_since_ms.is_none() {
             self.cvd_since_ms = Some(trade.trade_ms);
             self.covered_from_ms = Some(trade.trade_ms);
@@ -394,9 +460,24 @@ impl TradeFlow {
         self.window.len()
     }
 
+    /// Silence is measured on the feature clock, so live and replay classify identically.
+    pub fn trade_state(&self, quiet_ms: i64, stale_ms: i64) -> TradeState {
+        match (self.epoch_last_trade_ms, self.clock_ms) {
+            (Some(last), Some(clock)) => match clock.saturating_sub(last) {
+                s if s <= quiet_ms => TradeState::Active,
+                s if s <= stale_ms => TradeState::Quiet,
+                _ => TradeState::Stale,
+            },
+            _ => TradeState::None,
+        }
+    }
+
     fn restart_epoch(&mut self) {
         self.cvd = Decimal::ZERO;
         self.cvd_since_ms = None;
+        self.epoch_buy_qty = Decimal::ZERO;
+        self.epoch_sell_qty = Decimal::ZERO;
+        self.epoch_last_trade_ms = None;
         self.covered_from_ms = None;
         self.window.clear();
         self.base = 0;
@@ -445,6 +526,42 @@ mod tests {
             .into_iter()
             .map(|w| w.delta.map(|v| v.to_string()))
             .collect()
+    }
+
+    #[test]
+    fn trade_state_follows_silence_on_the_feature_clock() {
+        let mut flow = TradeFlow::new(&[1_000]);
+        assert_eq!(flow.trade_state(10, 100), TradeState::None);
+        flow.on_trade(&trade(1, 1_000, "1", false));
+        for (clock, want) in [
+            (1_010, TradeState::Active), // Boundary: silence == quiet is still active.
+            (1_011, TradeState::Quiet),
+            (1_100, TradeState::Quiet),
+            (1_101, TradeState::Stale),
+        ] {
+            flow.advance(clock);
+            assert_eq!(flow.trade_state(10, 100), want, "at {clock}");
+        }
+        flow.on_trade(&trade(2, 1_200, "1", true)); // Contiguous id: nothing was missed.
+        assert_eq!(flow.trade_state(10, 100), TradeState::Active);
+        assert_eq!((flow.epoch_buy_qty, flow.epoch_sell_qty), (d("1"), d("1")));
+        flow.reset_session();
+        assert_eq!(flow.trade_state(10, 100), TradeState::None);
+        assert_eq!(flow.epoch_buy_qty, Decimal::ZERO);
+    }
+
+    #[test]
+    fn config_round_trips_and_validates_thresholds() {
+        let cfg = FeatureConfig::default().with_trade_silence(5, 50).unwrap();
+        let text = serde_json::to_string(&cfg).unwrap();
+        let back: FeatureConfig = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.validated().unwrap(), cfg);
+        for (quiet, stale) in [(0, 10), (10, 10), (10, MAX_WINDOW_MS + 1)] {
+            assert!(FeatureConfig::default()
+                .with_trade_silence(quiet, stale)
+                .is_err());
+        }
+        assert!(serde_json::from_str::<FeatureConfig>(r#"{"cvd_windows_ms":[1]}"#).is_err());
     }
 
     #[test]

@@ -70,7 +70,30 @@ pub fn now_ns() -> i64 {
 
 /// Builds a connection lifecycle envelope (`seq` is assigned by the recorder loop).
 pub fn connection(event: &str, detail: &str, recv_ts_ns: i64) -> Envelope {
-    let payload = serde_json::json!({ "event": event, "detail": detail }).to_string();
+    connection_with(event, detail, None, recv_ts_ns)
+}
+
+/// `session_start` carries the feature configuration, so replay can verify it.
+pub fn session_start(
+    detail: &str,
+    feature_config: &crate::features::FeatureConfig,
+    recv_ts_ns: i64,
+) -> Envelope {
+    let config = serde_json::to_value(feature_config).unwrap_or_default();
+    connection_with("session_start", detail, Some(config), recv_ts_ns)
+}
+
+fn connection_with(
+    event: &str,
+    detail: &str,
+    feature_config: Option<serde_json::Value>,
+    recv_ts_ns: i64,
+) -> Envelope {
+    let mut payload = serde_json::json!({ "event": event, "detail": detail });
+    if let Some(config) = feature_config {
+        payload["feature_config"] = config;
+    }
+    let payload = payload.to_string();
     Envelope {
         v: SCHEMA_VERSION,
         seq: 0,

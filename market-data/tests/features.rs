@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use market_data::binance::{envelope_from_snapshot, envelope_from_stream};
-use market_data::event::{connection, Envelope};
+use market_data::event::{connection, session_start, Envelope};
 use market_data::features::{FeatureConfig, FeatureSnapshot};
 use market_data::pipeline::Pipeline;
 use market_data::recorder::{replay, FeatureWriter, Recorder};
@@ -303,6 +303,67 @@ fn feature_file_is_partial_until_finished_and_never_overwritten() {
     assert!(!dir.path().join("f.ndjson.partial").exists());
     let err = FeatureWriter::create(&path).err().unwrap();
     assert_eq!(err.kind(), std::io::ErrorKind::AlreadyExists);
+}
+
+/// Depth keeps flowing while trades stop: past the stale threshold the row withholds CVD
+/// instead of reporting zeros, and the values return once a contiguous trade arrives.
+#[test]
+fn stale_trade_stream_withholds_cvd() {
+    let cfg = FeatureConfig::new(vec![1_000], vec![1])
+        .unwrap()
+        .with_trade_silence(2_000, 5_000)
+        .unwrap();
+    let mut pipeline = Pipeline::new(cfg);
+    let mut events = session()[..5].to_vec(); // Synced at 1000, trade 1 at 1200.
+    for (i, e) in [3_300, 7_000, 7_100].into_iter().enumerate() {
+        events.push(depth(11 + i as u64, 10 + i as u64, e, &[], &[]));
+    }
+    events.push(trade(2, 7_150, "2", true));
+    events.push(depth(14, 13, 7_200, &[], &[]));
+    let rows: Vec<FeatureSnapshot> = events
+        .into_iter()
+        .enumerate()
+        .filter_map(|(seq, mut env)| {
+            env.seq = seq as u64;
+            pipeline.handle(&env).feature
+        })
+        .collect();
+    let states: Vec<_> = rows
+        .iter()
+        .map(|r| serde_json::to_value(r.trade_state).unwrap())
+        .collect();
+    assert_eq!(states, ["none", "quiet", "stale", "stale", "active"]);
+    let stale = &rows[2];
+    assert_eq!(
+        (stale.cvd, stale.buy_qty, stale.deltas[0].delta),
+        (None, None, None)
+    );
+    assert_eq!(stale.last_trade_ms, Some(1_200)); // Still reported so a consumer can judge.
+    let back = &rows[4];
+    assert_eq!(back.cvd.map(|d| d.to_string()), Some("-1.5".into()));
+    assert_eq!(back.buy_qty.map(|d| d.to_string()), Some("0.5".into()));
+    assert_eq!(back.sell_qty.map(|d| d.to_string()), Some("2".into()));
+}
+
+#[test]
+fn replay_detects_feature_config_mismatch() {
+    let recorded = config();
+    let other = FeatureConfig::new(vec![1_000], vec![1, 2]).unwrap();
+    for (pipeline_config, start, mismatch, unverified) in [
+        (recorded.clone(), session_start("t", &recorded, 0), 0, 0),
+        (other.clone(), session_start("t", &recorded, 0), 1, 0),
+        (other, connection("session_start", "old", 0), 0, 1),
+    ] {
+        let mut pipeline = Pipeline::new(pipeline_config);
+        pipeline.handle(&start);
+        assert_eq!(
+            (
+                pipeline.stats.config_mismatch,
+                pipeline.stats.config_unverified
+            ),
+            (mismatch, unverified)
+        );
+    }
 }
 
 /// The committed file pins the full serialized format, not just the hand-checked values.
