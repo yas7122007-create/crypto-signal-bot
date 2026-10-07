@@ -1,8 +1,11 @@
-"""Fix 6 (adversarial-audit corrective pass): mutual exclusion, graduated skipping under
-pressure, fail-closed behavior on the gate's own internal failure, and that none of this
-affects anything when a caller never invokes it (V2_MODE="off")."""
+"""ResourceGate: one heavy model job at a time, graduated skipping under host pressure, and
+fail-closed on every gate failure -- invalid configuration, unexpected telemetry errors, an
+unsupported platform, or a bug in the gate itself never lets a heavy job run."""
 from collections import deque
 import gc
+import math
+import os
+import tempfile
 import threading
 import time
 import unittest
@@ -10,17 +13,150 @@ from unittest.mock import patch
 
 from v2 import resource_gate as RG
 
+HEALTHY = dict(load=0.1, free_mb=64_000.0)
+
+
+def host(load, free_mb):
+    """Patch both measurements to fixed values (load per core, free RAM in MB)."""
+    return patch.multiple(RG, _load_per_core=lambda: load, _free_mb=lambda: free_mb,
+                          _linux=lambda: True)
+
+
+def healthy():
+    return host(**HEALTHY)
+
+
+class Ran:
+    """A heavy-job stand-in that records whether it was executed."""
+
+    def __init__(self, value="ran"):
+        self.calls, self.value = 0, value
+
+    def __call__(self):
+        self.calls += 1
+        return self.value
+
+
+def env(**values):
+    return patch.dict(os.environ, {k: str(v) for k, v in values.items()})
+
+
+class InvalidConfigFailsClosed(unittest.TestCase):
+    def assert_blocked(self, **values):
+        job = Ran()
+        with env(**values), healthy():
+            self.assertEqual(RG.check(), RG.INVALID_CONFIG)
+            for kind in RG.JOBS:
+                self.assertEqual(RG.guarded(kind, job), (False, RG.INVALID_CONFIG))
+        self.assertEqual(job.calls, 0)
+
+    def test_non_numeric_cpu_threshold(self):
+        self.assert_blocked(V2_RESOURCE_MAX_LOAD_PER_CORE="bogus")
+
+    def test_non_numeric_ram_threshold(self):
+        self.assert_blocked(V2_RESOURCE_MIN_FREE_MB="bogus")
+
+    def test_nan_infinity_zero_negative_and_blank_thresholds(self):
+        for name in ("V2_RESOURCE_MAX_LOAD_PER_CORE", "V2_RESOURCE_MIN_FREE_MB"):
+            for bad in ("nan", "NaN", "inf", "-inf", "Infinity", "0", "-1", "", "  ", "1e400"):
+                with self.subTest(name=name, value=bad):
+                    self.assert_blocked(**{name: bad})
+
+    def test_defaults_and_valid_overrides_are_accepted(self):
+        job = Ran()
+        with healthy():
+            self.assertEqual(RG.check(), RG.OK)
+        with env(V2_RESOURCE_MAX_LOAD_PER_CORE="2.5", V2_RESOURCE_MIN_FREE_MB="256"), healthy():
+            self.assertEqual(RG.guarded("patchtst", job), (True, "ran"))
+        self.assertEqual(job.calls, 1)
+
+
+class TelemetryErrorFailsClosed(unittest.TestCase):
+    def assert_blocked(self, reason=RG.TELEMETRY_ERROR):
+        job = Ran()
+        self.assertEqual(RG.check(), reason)
+        for kind in RG.JOBS:
+            self.assertEqual(RG.guarded(kind, job), (False, reason))
+        self.assertEqual(job.calls, 0)
+
+    def test_unexpected_load_measurement_exception(self):
+        for exc in (OSError("load unobtainable"), RuntimeError("boom"), ZeroDivisionError()):
+            with self.subTest(exc=exc), patch.object(RG, "_linux", return_value=True), \
+                    patch("os.getloadavg", side_effect=exc), \
+                    patch.object(RG, "_free_mb", return_value=64_000.0):
+                self.assert_blocked()
+
+    def test_unexpected_ram_measurement_exception(self):
+        with patch.object(RG, "_linux", return_value=True), \
+                patch.object(RG, "_load_per_core", return_value=0.1), \
+                patch.object(RG, "MEMINFO", "/nonexistent/meminfo"):
+            self.assert_blocked()
+
+    def test_malformed_proc_meminfo(self):
+        cases = ["", "MemTotal: 100 kB\n", "MemAvailable: lots kB\n", "MemAvailable:\n",
+                 "MemAvailable: -5 kB\n", "MemAvailable: nan kB\n", "\x00\xff garbage"]
+        for content in cases:
+            with self.subTest(content=content), tempfile.NamedTemporaryFile("w", delete=False) as f:
+                f.write(content)
+            try:
+                with patch.object(RG, "_linux", return_value=True), \
+                        patch.object(RG, "_load_per_core", return_value=0.1), \
+                        patch.object(RG, "MEMINFO", f.name):
+                    self.assert_blocked()
+            finally:
+                os.unlink(f.name)
+
+    def test_non_finite_or_negative_measurements(self):
+        for load, free in ((math.nan, 1e5), (math.inf, 1e5), (-1.0, 1e5), (0.1, math.nan),
+                           (0.1, -1.0), (0.1, math.inf)):
+            with self.subTest(load=load, free=free), host(load, free):
+                self.assert_blocked()
+
+    def test_real_linux_telemetry_parses(self):
+        """On this (Linux) host, the real measurement path reaches a verdict, not an error."""
+        if not RG._linux():
+            self.skipTest("Linux-only")
+        self.assertIn(RG.check(), (RG.OK, RG.PRESSURE, RG.SEVERE))
+
+
+class UnsupportedPlatform(unittest.TestCase):
+    def test_unsupported_source_is_distinct_and_fails_closed(self):
+        job = Ran()
+        with patch.object(RG, "_linux", return_value=False):
+            self.assertEqual(RG.check(), RG.UNSUPPORTED)
+            self.assertEqual(RG.guarded("patchtst", job), (False, RG.UNSUPPORTED))
+        self.assertEqual(job.calls, 0)
+        self.assertNotEqual(RG.UNSUPPORTED, RG.TELEMETRY_ERROR)
+
+
+class GraduatedPressure(unittest.TestCase):
+    def test_healthy_host_runs_both_jobs(self):
+        with healthy():
+            self.assertEqual(RG.guarded("toto", Ran("t")), (True, "t"))
+            self.assertEqual(RG.guarded("patchtst", Ran("p")), (True, "p"))
+
+    def test_pressure_skips_toto_but_not_patchtst(self):
+        toto, patchtst = Ran(), Ran()
+        for load, free in ((2.0, 64_000.0), (0.1, 400.0)):  # CPU pressure, then RAM pressure
+            with self.subTest(load=load, free=free), host(load, free):
+                self.assertEqual(RG.check(), RG.PRESSURE)
+                self.assertEqual(RG.guarded("toto", toto), (False, RG.PRESSURE))
+                self.assertEqual(RG.guarded("patchtst", patchtst), (True, "ran"))
+        self.assertEqual(toto.calls, 0)
+
+    def test_severe_pressure_skips_patchtst_too(self):
+        job = Ran()
+        for load, free in ((4.0, 64_000.0), (0.1, 100.0)):
+            with self.subTest(load=load, free=free), host(load, free):
+                self.assertEqual(RG.check(), RG.SEVERE)
+                self.assertEqual(RG.guarded("toto", job), (False, RG.SEVERE))
+                self.assertEqual(RG.guarded("patchtst", job), (False, RG.SEVERE))
+        self.assertEqual(job.calls, 0)
+
 
 class MutualExclusion(unittest.TestCase):
-    def test_a_single_job_runs_and_returns_its_value(self):
-        ran, result = RG.guarded("patchtst", lambda: 42)
-        self.assertEqual((ran, result), (True, 42))
-
     def test_a_second_job_is_skipped_not_queued_while_one_is_in_flight(self):
-        """One heavy job at a time: a second call arriving while the first holds the mutex
-        must be skipped immediately (BUSY), never blocked waiting for a turn -- there is no
-        queue for it to wait in."""
-        order = []
+        order, results = [], []
 
         def slow():
             order.append("start")
@@ -28,129 +164,84 @@ class MutualExclusion(unittest.TestCase):
             order.append("end")
             return "slow-done"
 
-        results = []
-
-        def run_slow():
-            results.append(RG.guarded("patchtst", slow))
-
-        t = threading.Thread(target=run_slow)
-        t.start()
-        time.sleep(0.05)  # let the slow job acquire the mutex first.
-        second = RG.guarded("toto", lambda: "second-ran")
-        t.join()
-        self.assertEqual(second, (False, RG.BUSY))
-        self.assertEqual(results[0], (True, "slow-done"))
-        # The second call never ran concurrently with the first -- it was skipped outright.
+        with healthy():
+            t = threading.Thread(target=lambda: results.append(RG.guarded("patchtst", slow)))
+            t.start()
+            time.sleep(0.05)
+            second = Ran()
+            self.assertEqual(RG.guarded("patchtst", second), (False, RG.BUSY))
+            t.join()
+        self.assertEqual(results, [(True, "slow-done")])
         self.assertEqual(order, ["start", "end"])
+        self.assertEqual(second.calls, 0)
 
-    def test_the_mutex_is_released_after_a_run_so_the_next_call_is_not_stuck_forever(self):
-        RG.guarded("patchtst", lambda: None)
-        ran, result = RG.guarded("patchtst", lambda: "again")
-        self.assertEqual((ran, result), (True, "again"))
+    def assert_mutex_free(self):
+        self.assertTrue(RG._LOCK.acquire(blocking=False), "mutex left held")
+        RG._LOCK.release()
 
-    def test_the_mutex_is_released_even_when_fn_raises(self):
-        with self.assertRaises(ValueError):
-            RG.guarded("patchtst", lambda: (_ for _ in ()).throw(ValueError("boom")))
-        # Still released: a later call is not permanently BUSY because of the failure above.
-        ran, result = RG.guarded("patchtst", lambda: "ok")
-        self.assertEqual((ran, result), (True, "ok"))
+    def test_released_after_success(self):
+        with healthy():
+            RG.guarded("patchtst", Ran())
+        self.assert_mutex_free()
 
+    def test_released_after_model_exception_which_propagates(self):
+        def broken():
+            raise ValueError("model broke")
+        with healthy(), self.assertRaises(ValueError):
+            RG.guarded("patchtst", broken)
+        self.assert_mutex_free()
 
-class GraduatedSkippingUnderPressure(unittest.TestCase):
-    def test_toto_is_skipped_before_even_attempting_the_mutex(self):
-        with patch.object(RG, "under_pressure", return_value=True):
-            ran, reason = RG.guarded("toto", lambda: "should not run")
-        self.assertEqual((ran, reason), (False, RG.PRESSURE))
+    def test_released_after_gate_error_and_job_not_run(self):
+        job = Ran()
+        with healthy(), patch.object(RG, "check", side_effect=RuntimeError("gate bug")):
+            self.assertEqual(RG.guarded("toto", job), (False, RG.GATE_ERROR))
+        self.assertEqual(job.calls, 0)
+        self.assert_mutex_free()
 
-    def test_patchtst_is_skipped_too_once_toto_already_was(self):
-        """Escalating pressure: with pressure still present, PatchTST (checked once the
-        mutex is held) is skipped the same way Toto already was."""
-        with patch.object(RG, "under_pressure", return_value=True):
-            toto = RG.guarded("toto", lambda: "should not run")
-            patchtst = RG.guarded("patchtst", lambda: "should not run either")
-        self.assertEqual(toto, (False, RG.PRESSURE))
-        self.assertEqual(patchtst, (False, RG.PRESSURE))
+    def test_released_after_every_rejection(self):
+        with env(V2_RESOURCE_MIN_FREE_MB="bogus"), healthy():
+            RG.guarded("patchtst", Ran())
+        with host(9.0, 1.0):
+            RG.guarded("patchtst", Ran())
+        self.assert_mutex_free()
 
-    def test_without_pressure_both_jobs_run_normally(self):
-        with patch.object(RG, "under_pressure", return_value=False):
-            self.assertEqual(RG.guarded("toto", lambda: "t"), (True, "t"))
-            self.assertEqual(RG.guarded("patchtst", lambda: "p"), (True, "p"))
-
-    def test_a_pressure_source_that_cannot_be_measured_is_not_treated_as_pressure(self):
-        """getloadavg()/the meminfo file not existing on this host is a normal, expected
-        condition (e.g. in a sandboxed container), not pressure."""
-        with patch("os.getloadavg", side_effect=AttributeError("not supported")), \
-             patch("builtins.open", side_effect=OSError("no such file")):
-            self.assertFalse(RG.under_pressure())
+    def test_unknown_job_kind_is_a_gate_error(self):
+        job = Ran()
+        with healthy():
+            self.assertEqual(RG.guarded("mystery", job), (False, RG.GATE_ERROR))
+        self.assertEqual(job.calls, 0)
 
 
-class FailClosedOnInternalFailure(unittest.TestCase):
-    def test_an_internal_exception_skips_the_job_rather_than_running_it_unguarded(self):
-        ran_fn = []
-        with patch.object(RG, "under_pressure", side_effect=RuntimeError("gate bug")):
-            result = RG.guarded("patchtst", lambda: ran_fn.append(1))
-        self.assertEqual(result, (False, RG.GATE_ERROR))
-        self.assertEqual(ran_fn, [])  # fn() was never called.
-
-    def test_an_internal_exception_never_propagates_to_the_caller(self):
-        with patch.object(RG, "under_pressure", side_effect=RuntimeError("gate bug")):
-            try:
-                RG.guarded("patchtst", lambda: "x")
-            except Exception as exc:  # pragma: no cover - the assertion is that this never fires.
-                self.fail(f"guarded() must not raise on its own account, raised {exc!r}")
-
-    def test_fn_raising_once_the_gate_itself_is_fine_still_propagates(self):
-        """The gate's job is to fail closed on ITS OWN bugs, not to swallow the model call's
-        own exceptions -- callers already handle those (patchtst_forecast()/
-        toto_evidence() both wrap their bridge calls)."""
-        with self.assertRaises(ValueError):
-            RG.guarded("patchtst", lambda: (_ for _ in ()).throw(ValueError("model broke")))
-
-    def test_the_mutex_is_not_left_held_after_a_gate_error(self):
-        with patch.object(RG, "under_pressure", side_effect=RuntimeError("gate bug")):
-            RG.guarded("patchtst", lambda: None)
-        ran, result = RG.guarded("patchtst", lambda: "still works")
-        self.assertEqual((ran, result), (True, "still works"))
-
-
-class V1Unaffected(unittest.TestCase):
+class V1UnaffectedAndBounded(unittest.TestCase):
     def test_v2_mode_off_never_reaches_this_module(self):
-        """reasoning.patchtst_forecast()/toto_evidence() check V2_MODE before importing
-        v2.resource_gate at all; this gate has no code path that runs when V2_MODE="off"."""
-        import os
         import reasoning
-        with patch.dict("os.environ", {}, clear=False):
+        with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("V2_MODE", None)
-            with patch.object(RG, "guarded", side_effect=AssertionError("resource_gate touched under off")):
+            with patch.object(RG, "guarded", side_effect=AssertionError("gate touched under off")), \
+                    patch.object(RG, "check", side_effect=AssertionError("gate touched under off")):
                 self.assertEqual(reasoning.patchtst_forecast({"symbol": "BTCUSDT"}, 0), "NOT_AVAILABLE")
                 self.assertEqual(reasoning.toto_evidence({"symbol": "BTCUSDT"}, {"status": "ok"}, 0),
                                  "NOT_AVAILABLE")
 
-    def test_no_unbounded_queue_exists(self):
-        """There is exactly one mutex and no growable container anywhere in this module: a
-        skipped job leaves no trace to grow unbounded. Checks by TYPE, not by name (a
-        name-only check would pass trivially if an unbounded structure existed under some
-        other name), and proves it behaviorally by running many more jobs than any
-        plausible queue size and confirming nothing accumulates."""
+    def test_no_growable_state_in_the_module(self):
         growable = (list, dict, set, deque)
-        module_containers = {name: value for name, value in vars(RG).items()
-                             if not name.startswith("__") and isinstance(value, growable)}
-        self.assertEqual(module_containers, {})
-        self.assertIsInstance(RG._LOCK, type(threading.Lock()))
+        found = {n: v for n, v in vars(RG).items() if not n.startswith("__") and isinstance(v, growable)}
+        self.assertEqual(found, {})
+
+    def test_500_rejected_calls_accumulate_nothing(self):
+        job = Ran()
         gc.collect()
-        before = len(gc.get_objects())
-        for _ in range(500):
-            RG.guarded("patchtst", lambda: None)
-        with patch.object(RG, "under_pressure", return_value=True):
-            for _ in range(500):
-                RG.guarded("toto", lambda: self.fail("must not run under pressure"))
+        before_objects, before_threads = len(gc.get_objects()), threading.active_count()
+        with env(V2_RESOURCE_MAX_LOAD_PER_CORE="bogus"), healthy():
+            for _ in range(250):
+                RG.guarded("patchtst", job)
+        with host(9.0, 1.0):
+            for _ in range(250):
+                RG.guarded("toto", job)
         gc.collect()
-        after = len(gc.get_objects())
-        # Heap object count after 500 runs/skips, once garbage-collected, should not have
-        # grown by anything close to 500 -- a real queue holding one entry per call would
-        # show a clear linear trend; noise from the test harness itself is tolerated with a
-        # generous margin.
-        self.assertLess(after - before, 100)
+        self.assertEqual(job.calls, 0)
+        self.assertLess(len(gc.get_objects()) - before_objects, 100)
+        self.assertEqual(threading.active_count(), before_threads)
 
 
 if __name__ == "__main__":

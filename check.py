@@ -336,12 +336,18 @@ def v2_bridge_checks(candidate):
             # numpy (and maybe torch) present: exercise a bridge call that raises too.
             with patch("v2.bridge.forecast", side_effect=RuntimeError("boom")):
                 assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
-            # Fix 6: wired through v2.resource_gate -- under pressure the bridge call is
-            # skipped outright (never attempted), still degrading to NOT_AVAILABLE.
+            # Wired through v2.resource_gate: under severe pressure, or with an invalid gate
+            # threshold, the bridge call is never attempted and the public path still just
+            # returns NOT_AVAILABLE (fail closed, nothing raised).
             import v2.resource_gate as _rg
-            with patch.object(_rg, "under_pressure", return_value=True), \
-                 patch("v2.bridge.forecast", side_effect=AssertionError("ran under pressure")):
+            never = patch("v2.bridge.forecast", side_effect=AssertionError("PatchTST ran"))
+            with patch.object(_rg, "check", return_value=_rg.SEVERE), never:
                 assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+            for name in ("V2_RESOURCE_MAX_LOAD_PER_CORE", "V2_RESOURCE_MIN_FREE_MB"):
+                for bad in ("bogus", "nan", "inf", "0"):
+                    with patch.dict("os.environ", {name: bad}), never:
+                        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+            print("PASS: ResourceGate pressure/invalid config never runs PatchTST, never raises")
     ev = reasoning.evidence(candidate, {})
     assert ev["forecast"]["toto"] == "NOT_AVAILABLE"
     print("PASS: V2_MODE off/shadow/on, invalid mode rejected, bridge failures degrade to NOT_AVAILABLE")
@@ -402,7 +408,12 @@ def toto_evidence_checks(candidate):
         print(json.dumps({"decision": "CONFIRM", "p_up": 0.7, "confidence": 0.8,
                           "model_version": "sha256:" + "c" * 64}))
     """)
-    with tempfile.TemporaryDirectory() as d:
+    import v2.resource_gate as _rg
+    real_check = _rg.check
+    # These checks exercise the Toto plumbing, not this machine's load: pin the host status to
+    # healthy so they cannot flake on a busy host. The gate's own behavior is tested in
+    # tests/test_resource_gate.py and in the pressure/invalid-config checks below.
+    with tempfile.TemporaryDirectory() as d, patch.object(_rg, "check", return_value=_rg.OK):
         script = os.path.join(d, "worker.py")
         with open(script, "w") as f:
             f.write(worker)
@@ -454,15 +465,21 @@ def toto_evidence_checks(candidate):
                                        "V2_TOTO_WORKER_CMD": f"{sys.executable} -c exit(1)"}):
             failed = reasoning.toto_evidence(candidate, ok_forecast, 0)
             assert failed == "NOT_AVAILABLE" or failed.get("status") == "unavailable", failed
-        # Fix 6: under resource pressure, the worker subprocess is never even launched --
-        # the gate skips it, same NOT_AVAILABLE as any other failure.
-        import v2.resource_gate as _rg
-        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
-                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}), \
-             patch.object(_rg, "under_pressure", return_value=True), \
-             patch("v2.workers.run", side_effect=AssertionError("worker launched under pressure")):
-            gated = reasoning.toto_evidence(candidate, ok_forecast, 0)
-            assert gated == "NOT_AVAILABLE", gated
+        # Under ordinary pressure, a gate error status, or an invalid threshold, the Toto
+        # worker subprocess is never launched; the public path returns NOT_AVAILABLE.
+        configured = {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                      "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}
+        never = patch("v2.workers.run", side_effect=AssertionError("Toto worker launched"))
+        for status in (_rg.PRESSURE, _rg.SEVERE, _rg.TELEMETRY_ERROR, _rg.UNSUPPORTED):
+            with patch.dict("os.environ", configured), never, \
+                    patch.object(_rg, "check", return_value=status):
+                assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
+        for name in ("V2_RESOURCE_MAX_LOAD_PER_CORE", "V2_RESOURCE_MIN_FREE_MB"):
+            for bad in ("bogus", "nan", "inf", "0"):
+                with patch.dict("os.environ", dict(configured, **{name: bad})), never, \
+                        patch.object(_rg, "check", real_check):
+                    assert _rg.check() == _rg.INVALID_CONFIG
+                    assert reasoning.toto_evidence(candidate, ok_forecast, 0) == "NOT_AVAILABLE"
     print("PASS: toto_evidence off/unconfigured degrades to NOT_AVAILABLE; a configured worker reaches a real CONFIRM")
 
 
