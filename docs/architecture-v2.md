@@ -10,16 +10,18 @@ Binance Futures WebSocket
   -> Local L2 order book                      Phase 1   sync implemented
   -> Order-flow engine (CVD, OBI, microprice) Phase 2   implemented; live Binance run not yet verified
   -> Recorder + deterministic replay          Phase 3   implemented (gzip NDJSON)
-  -> Python/Rust interface                    Phase 4   implemented (v2/bridge.py); not wired into bot.scan()
-  -> PatchTST forecasting                     Phase 3   implemented offline (v2/patchtst.py); behind V2_MODE in reasoning.py
+  -> Python/Rust interface                    Phase 4   implemented (v2/bridge.py); reachable from bot.scan() as advisory evidence when V2_MODE is shadow/on
+  -> PatchTST forecasting                     Phase 3   implemented (v2/patchtst.py); live-reachable advisory evidence behind V2_MODE + ResourceGate
   -> Deterministic strategy / risk gate       existing  engine.py, validate_market
-  -> Toto final validation                    Phase 5   implemented (v2/toto.py); no real model available here (needs HuggingFace + a conflicting torch version); wired behind V2_MODE + V2_TOTO_WORKER_CMD
+  -> Toto final validation                    Phase 5   implemented (v2/toto.py); no real model available here (needs HuggingFace + a conflicting torch version); live-reachable advisory evidence behind V2_MODE + V2_TOTO_WORKER_CMD + ResourceGate
   -> Nemotron reasoning / explanation         existing  advisory, implemented (reasoning.explain)
-  -> Nemotron CONFIRM/HOLD gate               Phase 5B  implemented (reasoning.confirm_gate); not called anywhere yet
+  -> Nemotron CONFIRM/HOLD gate               Phase 5B  implemented (reasoning.confirm_gate); research/shadow only, not called anywhere
   -> Deterministic ranking (max 3)            Phase 6   implemented (v2/ranking.py); not wired into bot.scan()
   -> Paper evaluation journal + metrics       Phase 7   implemented (v2/evaluate.py); not wired into bot.scan()
   -> Fresh market revalidation -> paper signal -> Telegram / observability (Phase 9)
 ```
+
+See "Runtime status" below for exactly which of these are reachable from the live loop.
 
 The phase order is a dependency order. Toto and PatchTST come later because their output has no measurable meaning without reliable, replayable upstream data, not because they are optional.
 
@@ -78,8 +80,23 @@ Computed in `market-data/src/features.rs` inside the one `Pipeline` that both li
 
 **Output, integrity, staleness.** Frozen in [feature-schema.md](feature-schema.md) (schema v2): rotated gzip storage with a file cap, the feature config recorded in `session_start` and enforced by replay, and `trade_state` so a stalled trade stream withholds CVD instead of reporting zeros.
 
-**Known limits.** Trade silence thresholds are a policy, not proof of a stall. Features are consumed by Python only via v2/bridge.py (Phase 4), behind V2_MODE; the live bot.scan() loop does not call it yet.
+**Known limits.** Trade silence thresholds are a policy, not proof of a stall. Features are consumed by Python only via v2/bridge.py (Phase 4), behind V2_MODE; with V2_MODE=shadow/on, bot.scan() reaches it through reasoning.evidence() as advisory input only (see "Runtime status").
 
 ## Current Nemotron evidence
 
-`reasoning.evidence()` sends the engine features, entry/SL/TP, market gate output, rules and journal summary, plus `forecast.patchtst` (Phase 4's bridge) and `forecast.toto` (Phase 5's validator). Both default to the string `"NOT_AVAILABLE"` when `V2_MODE` (env var, default `"off"`) is off, or when the required configuration (`V2_STATE_DIR`, `V2_MODEL_DIR`, `V2_TOTO_WORKER_CMD`) is not set -- which is the case everywhere today, since no real PatchTST deployment or Toto worker exists outside tests. See docs/forecasting.md for the full Phase 3-7 design, what is and is not wired into the live `bot.scan()` loop, and the explicit conflict Phase 5B's CONFIRM/HOLD gate raises against this document's own "Nemotron... never overrides" rule above -- flagged there for the project owner/Astra, not resolved by this document.
+`reasoning.evidence()` sends the engine features, entry/SL/TP, market gate output, rules and journal summary, plus `forecast.patchtst` (Phase 4's bridge) and `forecast.toto` (Phase 5's validator). Both are the string `"NOT_AVAILABLE"` when `V2_MODE` is `off` (the default), when the required configuration (`V2_STATE_DIR`, `V2_MODEL_DIR`, `V2_TOTO_WORKER_CMD`) is not set, when the ResourceGate skips the job, or on any failure. No real PatchTST deployment or Toto worker is configured anywhere today, so in practice both are `"NOT_AVAILABLE"`; that is a deployment fact, not a code-path guarantee. The explicit conflict Phase 5B's CONFIRM/HOLD gate raises against this document's "Nemotron... never overrides" rule is discussed in docs/forecasting.md and remains for the project owner/Astra to resolve; nothing calls that gate.
+
+## Runtime status (authoritative; checked against the call graph)
+
+Live call path: `bot.scan()` -> `reasoning.explain()` (for each candidate that passed the deterministic gates, non-legacy providers only) -> `reasoning.evidence()` -> `reasoning.patchtst_forecast()` and `reasoning.toto_evidence()`. `bot.py` imports nothing from `v2/` and does not call `confirm_gate`, ranking or paper evaluation.
+
+| Category | Components | What it means |
+|---|---|---|
+| Live authoritative | `engine.analyze`, `validate_market`, risk rules, `new_signal`, the V1 paper journal | The only code that decides whether a signal exists, its action, entry, stop and target. Unchanged by any V2_MODE value. |
+| Live-reachable advisory | PatchTST forecast, Toto validation | With `V2_MODE=shadow` or `on` and the required config set, their output is added to the evidence Nemotron explains. It is text Nemotron reads; it cannot change the action or levels. Its only indirect effect is latency (bounded by `V2_TOTO_TIMEOUT_SECONDS` and the gate), which runs before the fresh market revalidation and can therefore make that revalidation HOLD a signal. |
+| Implemented but not wired | `reasoning.confirm_gate`, `v2/ranking.py` (max 3), `v2/evaluate.py` (paper evaluation) | Tested in isolation; no production caller. |
+| Research/shadow only | Nemotron CONFIRM/HOLD | Not a production veto. Wiring it would need the owner's explicit decision (see docs/forecasting.md). |
+
+`V2_MODE` semantics: `off` (default, and the value any invalid setting degrades to with a warning) is exactly V1: nothing in `v2/` is imported and both evidence fields are `"NOT_AVAILABLE"`. `shadow` and `on` currently behave identically on the live path: PatchTST and Toto may run and appear as advisory evidence. The only place the code distinguishes them is `confirm_gate`, which nothing calls.
+
+ResourceGate (`v2/resource_gate.py`) runs every PatchTST and Toto call: one heavy job at a time process-wide (a second is skipped, never queued); Toto runs only on a confirmed-healthy host, PatchTST also under ordinary pressure, neither under severe pressure; invalid thresholds (`INVALID_CONFIG`), telemetry failures on Linux (`TELEMETRY_ERROR`) and non-Linux hosts (`UNSUPPORTED`) all skip both jobs. A skipped job is `"NOT_AVAILABLE"`, never an error in the scan.

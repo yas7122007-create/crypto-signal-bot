@@ -1,8 +1,10 @@
 # PatchTST forecasting (Phase 3), offline only
 
 `v2/` is a standalone package that forecasts the mid-price return over a fixed horizon from
-recorded one-minute bars ([bar-schema.md](bar-schema.md)). It does not run live, does not
-place orders, and does not yet feed the bot; Phase 4 defines the boundary that will. Install
+recorded one-minute bars ([bar-schema.md](bar-schema.md)). It never places orders. With
+`V2_MODE=off` (the default) the bot never imports it; with `shadow`/`on` and a configured model,
+its forecast reaches the live scan only as advisory evidence for Nemotron's explanation (see
+"Runtime status" in [architecture-v2.md](architecture-v2.md)). Install
 `requirements-ml.txt` to use it; `v2/bars.py`, `v2/contracts.py` and `v2/dataset.py`'s
 non-numpy pieces need only the standard library, so they can be imported anywhere.
 
@@ -141,9 +143,10 @@ real trained model.
   `"NOT_AVAILABLE"` or a `forecast.v1` dict.
 
 This is wiring only: the deterministic engine (`engine.analyze`) is untouched, and Nemotron
-still cannot change the action (Phase 5B keeps that true by construction). `shadow`/`on`
-reaching an actual decision is Phase 6's job (ranking/gating); until then this only changes
-what Nemotron is shown, and Nemotron is advisory. `check.py`'s new
+still cannot change the action (Phase 5B keeps that true by construction). `shadow` and `on`
+currently behave identically here: the forecast is live-reachable from `bot.scan()` (via
+`reasoning.explain()` -> `evidence()`) but only changes what Nemotron is shown, and Nemotron is
+advisory. Reaching an actual decision would be Phase 6's job, which is not wired. `check.py`'s new
 `v2_bridge_checks()` covers `V2_MODE` validation and that every failure mode degrades to
 `"NOT_AVAILABLE"` rather than crashing the scan loop, on hosts with and without the ML
 extras installed.
@@ -163,17 +166,33 @@ would conflict with the one PatchTST already uses here. `Adapter` is the interfa
 model would implement; `WorkerAdapter` runs one out of process via `v2.workers.run` (a fixed
 argv, JSON on stdin/stdout, a timeout -- exactly the isolation a conflicting torch version
 would need) so a future real adapter does not have to share PatchTST's environment.
+**Model identity is mandatory.** A real adapter's result must carry `model_version`, an
+immutable identity of the artifact that produced it: `sha256:<64 lowercase hex>` (weights or an
+immutable manifest) or `revision:<40 lowercase hex>` (an upstream commit). A missing value is
+`unavailable` with `reason: "model_version_missing"`; a blank, non-string, overlong, mutable or
+otherwise malformed one is `invalid_model_version`. There is no fallback: the worker's launch
+command (`V2_TOTO_WORKER_CMD`) identifies a process, not a checkpoint, and is never used as a
+model version. `FakeAdapter` (`TEST_ONLY = True`) is always labelled `test:fake-adapter-v1`,
+whatever it returns, and that label can never pass the real-identity check.
 `FakeAdapter` is explicitly marked as a test-only stand-in (a toy OBI-direction rule) used to
 prove `validate()`'s fail-closed wrapper actually works: a raising adapter, a timing-out
 worker, and invalid or out-of-range output all become `status: "unavailable"` with a specific
 `reason`, never a crash and never a fabricated decision. **NOT VERIFIED against a real Toto
 model or real market data** -- only the plumbing is tested.
 
-Running PatchTST and Toto "sequentially to reduce CPU contention" (the Phase 5 requirement)
-falls out of the design rather than needing scheduling code: `v2.bridge.forecast()` and
-`v2.toto.validate()` are both synchronous, in-process calls from the same caller, so nothing
-here introduces concurrency between them; `v2.patchtst.configure()` already bounds
-PyTorch's own thread count.
+**Resource bounds (`v2/resource_gate.py`).** Both live call sites
+(`reasoning.patchtst_forecast()` and `reasoning.toto_evidence()`) run their model through
+`resource_gate.guarded()`. At most one heavy job runs at a time process-wide; one arriving while
+another holds the mutex is skipped (`model_job_in_progress`), never queued. After acquiring the
+mutex the gate checks the host: Toto runs only when the status is `ok`; PatchTST also runs under
+ordinary `resource_pressure` (load per core above `V2_RESOURCE_MAX_LOAD_PER_CORE`, default 1.5,
+or available RAM below `V2_RESOURCE_MIN_FREE_MB`, default 512) and is skipped under
+`resource_pressure_severe` (twice the load limit or half the RAM floor). It fails closed on
+everything else: a threshold that is not a finite number above zero is `invalid_config` (never
+replaced by a default), any measurement failure on Linux is `telemetry_error`, a non-Linux host
+is `resource_unsupported`, and a bug in the gate is `gate_error`. Every skip returns
+`"NOT_AVAILABLE"`; the mutex is released on success, model exception and every rejection.
+`v2.patchtst.configure()` separately bounds PyTorch's own thread count.
 
 ## Phase 5B: Nemotron CONFIRM/HOLD gate (`reasoning.confirm_gate`)
 
