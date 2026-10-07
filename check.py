@@ -326,6 +326,12 @@ def v2_bridge_checks(candidate):
             # numpy (and maybe torch) present: exercise a bridge call that raises too.
             with patch("v2.bridge.forecast", side_effect=RuntimeError("boom")):
                 assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+            # Fix 6: wired through v2.resource_gate -- under pressure the bridge call is
+            # skipped outright (never attempted), still degrading to NOT_AVAILABLE.
+            import v2.resource_gate as _rg
+            with patch.object(_rg, "under_pressure", return_value=True), \
+                 patch("v2.bridge.forecast", side_effect=AssertionError("ran under pressure")):
+                assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
     ev = reasoning.evidence(candidate, {})
     assert ev["forecast"]["toto"] == "NOT_AVAILABLE"
     print("PASS: V2_MODE off/shadow/on, invalid mode rejected, bridge failures degrade to NOT_AVAILABLE")
@@ -426,6 +432,15 @@ def toto_evidence_checks(candidate):
                                        "V2_TOTO_WORKER_CMD": f"{sys.executable} -c exit(1)"}):
             failed = reasoning.toto_evidence(candidate, ok_forecast, 0)
             assert failed == "NOT_AVAILABLE" or failed.get("status") == "unavailable", failed
+        # Fix 6: under resource pressure, the worker subprocess is never even launched --
+        # the gate skips it, same NOT_AVAILABLE as any other failure.
+        import v2.resource_gate as _rg
+        with patch.dict("os.environ", {"V2_MODE": "on", "V2_STATE_DIR": state_dir,
+                                       "V2_TOTO_WORKER_CMD": f"{sys.executable} {script}"}), \
+             patch.object(_rg, "under_pressure", return_value=True), \
+             patch("v2.workers.run", side_effect=AssertionError("worker launched under pressure")):
+            gated = reasoning.toto_evidence(candidate, ok_forecast, 0)
+            assert gated == "NOT_AVAILABLE", gated
     print("PASS: toto_evidence off/unconfigured degrades to NOT_AVAILABLE; a configured worker reaches a real CONFIRM")
 
 

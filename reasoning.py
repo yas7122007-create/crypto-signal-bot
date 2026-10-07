@@ -69,6 +69,7 @@ def patchtst_forecast(candidate, now_ms):
         return "NOT_AVAILABLE"
     try:
         from v2 import bridge as v2_bridge
+        from v2 import resource_gate
     except ImportError:
         return "NOT_AVAILABLE"  # numpy/torch not installed on this host.
     try:
@@ -76,7 +77,15 @@ def patchtst_forecast(candidate, now_ms):
             model_dir=model_dir, max_stale_ms=int(bounded("V2_MAX_STALE_MS", "180000", 1000, 3_600_000)))
         horizon_ms = int(bounded("V2_HORIZON_MS", "900000", 60_000, 24 * 3_600_000))
         path = os.path.join(state_dir, f"{candidate['symbol']}.json")
-        return v2_bridge.forecast(path, candidate["symbol"], horizon_ms, config, now_ms=now_ms)
+        # Fix 6: at most one heavy model job (this or Toto's) runs at a time, skipped (never
+        # queued) under CPU/RAM pressure or when another is already in flight.
+        ran, result = resource_gate.guarded(
+            "patchtst", lambda: v2_bridge.forecast(path, candidate["symbol"], horizon_ms,
+                                                   config, now_ms=now_ms))
+        if not ran:
+            LOG.info("v2 patchtst dilewati: %s", result)
+            return "NOT_AVAILABLE"
+        return result
     except Exception as exc:  # Any bridge failure is NOT_AVAILABLE, never a crash or a value.
         LOG.warning("v2 patchtst bridge gagal: %s", safe_error(exc))
         return "NOT_AVAILABLE"
@@ -99,6 +108,7 @@ def toto_evidence(candidate, forecast, now_ms):
     try:
         import shlex
         from v2 import bridge as v2_bridge
+        from v2 import resource_gate
         from v2 import toto as v2_toto
     except ImportError:
         return "NOT_AVAILABLE"  # numpy not installed on this host.
@@ -113,8 +123,15 @@ def toto_evidence(candidate, forecast, now_ms):
         # digest/revision) over this value, so a changed checkpoint behind an unchanged
         # command is not silently reported as the same version.
         fallback_version = hashlib.sha256(worker_cmd.encode()).hexdigest()[:16]
-        return v2_toto.validate(candidate["symbol"], forecast["asof_ms"], bars, forecast, adapter,
-                                model_version=fallback_version)
+        # Fix 6: the same single-heavy-job gate as patchtst_forecast(); under pressure Toto
+        # (the secondary opinion) is the one skipped first.
+        ran, result = resource_gate.guarded(
+            "toto", lambda: v2_toto.validate(candidate["symbol"], forecast["asof_ms"], bars,
+                                             forecast, adapter, model_version=fallback_version))
+        if not ran:
+            LOG.info("v2 toto dilewati: %s", result)
+            return "NOT_AVAILABLE"
+        return result
     except Exception as exc:  # Any bridge failure is NOT_AVAILABLE, never a crash or a value.
         LOG.warning("v2 toto bridge gagal: %s", safe_error(exc))
         return "NOT_AVAILABLE"
