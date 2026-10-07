@@ -1,6 +1,8 @@
 """Fix 6 (adversarial-audit corrective pass): mutual exclusion, graduated skipping under
 pressure, fail-closed behavior on the gate's own internal failure, and that none of this
 affects anything when a caller never invokes it (V2_MODE="off")."""
+from collections import deque
+import gc
 import threading
 import time
 import unittest
@@ -125,11 +127,30 @@ class V1Unaffected(unittest.TestCase):
                                  "NOT_AVAILABLE")
 
     def test_no_unbounded_queue_exists(self):
-        """There is exactly one mutex and no queue data structure anywhere in this module:
-        a skipped job leaves no trace to grow unbounded."""
+        """There is exactly one mutex and no growable container anywhere in this module: a
+        skipped job leaves no trace to grow unbounded. Checks by TYPE, not by name (a
+        name-only check would pass trivially if an unbounded structure existed under some
+        other name), and proves it behaviorally by running many more jobs than any
+        plausible queue size and confirming nothing accumulates."""
+        growable = (list, dict, set, deque)
+        module_containers = {name: value for name, value in vars(RG).items()
+                             if not name.startswith("__") and isinstance(value, growable)}
+        self.assertEqual(module_containers, {})
         self.assertIsInstance(RG._LOCK, type(threading.Lock()))
-        queue_like = [name for name in dir(RG) if "queue" in name.lower() or "pending" in name.lower()]
-        self.assertEqual(queue_like, [])
+        gc.collect()
+        before = len(gc.get_objects())
+        for _ in range(500):
+            RG.guarded("patchtst", lambda: None)
+        with patch.object(RG, "under_pressure", return_value=True):
+            for _ in range(500):
+                RG.guarded("toto", lambda: self.fail("must not run under pressure"))
+        gc.collect()
+        after = len(gc.get_objects())
+        # Heap object count after 500 runs/skips, once garbage-collected, should not have
+        # grown by anything close to 500 -- a real queue holding one entry per call would
+        # show a clear linear trend; noise from the test harness itself is tolerated with a
+        # generous margin.
+        self.assertLess(after - before, 100)
 
 
 if __name__ == "__main__":

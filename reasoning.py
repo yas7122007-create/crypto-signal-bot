@@ -55,13 +55,28 @@ def v2_mode():
     return mode
 
 
+def _v2_mode_or_off():
+    """Fail-closed wrapper around v2_mode() (self-review finding, adversarial-audit
+    corrective pass): every V2 entry point (patchtst_forecast, toto_evidence, confirm_gate)
+    must degrade on a malformed V2_MODE the same way it degrades on every other failure --
+    never raise -- since a config typo is exactly the kind of error this project's fail-
+    closed convention exists to survive. v2_mode() itself still raises for an invalid value
+    (check.py relies on this to prove invalid values are rejected at the source); only the
+    call sites that act on the result treat that raise as "off", the safest fallback."""
+    try:
+        return v2_mode()
+    except ValueError as exc:
+        LOG.warning("V2_MODE tidak valid, diperlakukan sebagai off: %s", safe_error(exc))
+        return "off"
+
+
 def patchtst_forecast(candidate, now_ms):
     """Phase 4 bridge call, gated by V2_MODE (default "off" = todays exact behavior).
     Fails closed to the "NOT_AVAILABLE" string on anything but a validated forecast.v1
     object: no network call, and a missing model or stale/malformed state never raises
     here, so Nemotron's explanation (and, with V2_MODE=off, the deterministic engine) is
     never affected by this being unimplemented, untrained, or broken on this host."""
-    if v2_mode() == "off":
+    if _v2_mode_or_off() == "off":
         return "NOT_AVAILABLE"
     state_dir = os.getenv("V2_STATE_DIR", "").strip()
     model_dir = os.getenv("V2_MODEL_DIR", "").strip()
@@ -99,7 +114,7 @@ def toto_evidence(candidate, forecast, now_ms):
     docs/forecasting.md), so with V2_TOTO_WORKER_CMD unset this also stays "NOT_AVAILABLE";
     it is wired for whenever a real worker command is configured. Never raises; any failure
     degrades to "NOT_AVAILABLE", same as patchtst_forecast()."""
-    if v2_mode() == "off":
+    if _v2_mode_or_off() == "off":
         return "NOT_AVAILABLE"
     worker_cmd = os.getenv("V2_TOTO_WORKER_CMD", "").strip()
     state_dir = os.getenv("V2_STATE_DIR", "").strip()
@@ -247,7 +262,7 @@ def confirm_gate(candidate, history, now_ms=None):
     world where confirm_gate() did not exist. This matches patchtst_forecast()/
     toto_evidence(): every V2 entry point checks V2_MODE itself, rather than depending on
     some other function in the call chain to have already checked it."""
-    if v2_mode() == "off":
+    if _v2_mode_or_off() == "off":
         return dict(symbol=candidate.get("symbol"), model_name=None, model_version=None,
                     status="DISABLED", error="V2_MODE=off", latency_ms=0.0,
                     decision="HOLD", confidence=0.0, rationale="V2_MODE=off",

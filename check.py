@@ -309,6 +309,16 @@ def v2_bridge_checks(candidate):
         assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
     with patch.dict("os.environ", {"V2_MODE": "qwen"}):
         expect_error(reasoning.v2_mode)
+        # Self-review finding (independent adversarial review of this corrective pass):
+        # v2_mode() itself must still raise for an invalid value (checked above), but every
+        # caller that ACTS on it must fail closed, never propagate that raise -- a V2_MODE
+        # typo must never crash a candidate scan or any future confirm_gate() caller.
+        assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
+        assert reasoning.toto_evidence(candidate, {"status": "ok"}, 0) == "NOT_AVAILABLE"
+        gated = reasoning.confirm_gate(candidate, {})
+        assert gated["decision"] == "HOLD" and gated["status"] == "DISABLED"
+        reasoning.explain(candidate, {})  # must not raise either.
+    print("PASS: an invalid V2_MODE degrades every entry point to off, never raises")
     with patch.dict("os.environ", {"V2_MODE": "on"}):
         # No V2_STATE_DIR/V2_MODEL_DIR configured: fails closed, no crash.
         assert reasoning.patchtst_forecast(candidate, 0) == "NOT_AVAILABLE"
