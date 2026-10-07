@@ -204,3 +204,56 @@ to let AI output affect which candidates reach Telegram, which the original PRD'
 ruled out for `explain()`. Astra should treat this as a design decision that needs the
 project owner's explicit sign-off before `V2_MODE` is ever set to anything but `off` in a
 place a real signal could be issued, paper or otherwise.
+
+## Phase 6: ranking and gating (`v2/ranking.py`)
+
+Pure functions on plain dicts; no network, no database, nothing here can be affected by a
+later Telegram failure because Telegram delivery happens strictly after and separately
+(`services.deliver()` already persists the signal before attempting the network call and
+only ever changes its own `delivery` field on failure -- see that function; this was true
+before Phase 6 and is unchanged by it).
+
+A candidate is whatever `engine.analyze()` and `engine.validate_market() already produced,
+optionally carrying `forecast` (Phase 4), `toto` (Phase 5), and `gate` (Phase 5B, Nemotron's
+`confirm_gate()`) dicts. A candidate with none of those three keys -- today's exact V1
+output -- gates and scores identically to before: `gate()` always passes it and `score()`
+returns its existing `rank` unchanged. This is checked directly
+(`WithoutV2Evidence` in `tests/test_ranking.py`).
+
+**Gates** (hard, each independently switchable in `GateRules`, each firing only on its own
+evidence key): a stale PatchTST forecast (`reason: "stale_input"`), a Toto `REJECT`, or a
+Nemotron gate decision other than `CONFIRM` (including the gate being unavailable --
+fail-closed per Phase 5B) all reject the candidate outright. `engine.validate_market()`'s own
+checks (spread, funding, net R/R, timing) are not re-derived here; `gate()` only confirms a
+`market` key is present.
+
+**Score**: `rank * (0.5 + 0.5 * model_confidence)`, where `model_confidence` is the mean of
+whichever of PatchTST's `|p_up - 0.5| * 2`, Toto's `confidence`, and Nemotron's `confidence`
+are actually present (`ok`/`OK` status). The modifier is bounded to `[0.5, 1.0]`: V2 evidence
+can only lower a candidate below the deterministic engine's own score, by at most half, and
+only when there is a reason to be less confident, not more. A real disagreement is `gate()`'s
+job, not a score penalty.
+
+**`model_confidence` vs `historical_hit_rate`, kept explicitly separate**: `model_confidence`
+is an uncalibrated 0..1 summary of what the models themselves report; it has not been
+checked against outcomes and must never be shown as a win probability.
+`historical_hit_rate()` is the only calibrated number here -- the paper journal's own
+`positive_fraction` -- and only once there are at least `rules.evaluation_samples` of them
+(`None` otherwise). `rank_and_select()` returns at most 3 candidates (`MAX_CANDIDATES = 3`,
+overridable), sorted by score, ties broken by `historical_hit_rate` then symbol.
+
+**Not wired into `bot.scan()`.** `bot.py`'s live scan loop issues each candidate as it is
+evaluated, one at a time, so adding a batch gate/rank/select step ahead of that loop is a
+structural change to the one file every production run depends on. Given Phase 5B's flagged
+conflict (confirm_gate can veto, where the current design says AI never does) and this
+module's new hard gates, wiring this in is a deliberate decision for the project owner, not
+an "ordinary implementation decision" to make unasked. The integration point, if adopted,
+is: build the full `candidates` list exactly as `bot.scan()` does today, attach each
+candidate's `forecast`/`toto`/`gate` (Phase 4/5/5B, when `V2_MODE` is `shadow`/`on`), then
+call `rank_and_select()` once in place of the existing per-candidate loop's `sorted(...,
+key=rank, reverse=True)` ordering, and only issue signals for what survives.
+
+Telegram's 70%-style threshold, if ever added, must read `historical_hit_rate`, never
+`model_confidence` -- the two are not interchangeable, and this module keeps them as
+separate, separately-documented fields precisely so a future change cannot blur them
+without touching this file's tests.
